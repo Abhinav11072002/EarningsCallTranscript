@@ -1,0 +1,13 @@
+{
+  "name": "call-watcher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Watches the FMP admin earnings-call table and auto-joins + starts transcription for calls starting soon.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.47.2"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "portalUrl": "https://admin.financialmodelingprep.com/?section=data-fixes&tab=earningsCall",
+  "cdpUrl": "http://localhost:9222",
+  "pollIntervalMs": 20000,
+  "thresholdMinutes": 15,
+  "popupTimeoutMs": 8000,
+  "extensionShortcutSendKeys": "^+y",
+  "extensionId": "ajemmhlcfahhacllbjofkbbeageaedia",
+  "dummyIdentity": {
+    "firstName": "nocos",
+    "lastName": "nojcsd",
+    "fullName": "nocos nojcsd",
+    "email": "am@gmail.com",
+    "phone": "8076665432",
+    "company": "djcodnco",
+    "country": "USA"
+  },
+  "knownDirectProviderDomains": [
+    "edge.media-server.com",
+    "webcasts.com",
+    "choruscall.com",
+    "openbriefing.com",
+    "streamgate.com.au",
+    "zoom.us"
+  ]
+}
