@@ -158,9 +158,19 @@ Stop with **Ctrl+C**. Tabs already opened for in-flight calls are left open, not
 - Countdown parsing falls back to the rendered "X days Y hrs Z min W sec" text (no raw epoch
   attribute has been found on the cell so far) — worth tightening if a more direct data source
   ever turns up.
-- `webcastResolver.js`'s heuristics only cover link text like "webcast"/"listen live"/"join
-  call" plus a handful of known provider domains; a genuinely new IR platform layout may need a
-  new pattern (a warning is logged when one isn't recognized).
+- `webcastResolver.js` resolves an IR landing page in tiers, tried in order on each page it
+  looks at: (1) is the page itself already on a known provider domain
+  (`knownDirectProviderDomains` in `config.json` - grow this list from real cases seen in the
+  logs), (2) is the player embedded via `<iframe>` from a known domain (stay on the page -
+  `preferCurrentTab` capture grabs the whole tab anyway), (3) is there a link pointing to a
+  known provider domain regardless of its wording, (4) fall back to matching link text like
+  "webcast"/"listen live"/"join call". If none of those find anything on the first page, it
+  follows one bounded hop through an obvious navigational link ("Investor Relations"/"Events"/
+  "Webcasts") and retries tiers 1-4 there (`MAX_HOPS` in the file, currently 2 pages total) -
+  covers the case where the real webcast link is one click deeper than wherever the admin
+  portal's dial-in link lands. A genuinely new IR platform that's neither a known domain,
+  obviously-worded, nor reachable via an obvious nav link may still need a new pattern (a
+  warning is logged when nothing is recognized after all of the above).
 - `formFiller.js` matches common field naming/proximity patterns and falls back to a
   button-only click flow (for account-based gates like Q4); an unusual registration form may
   still need a new entry in `FIELD_PATTERNS` or `CTA_BUTTON_PATTERN`.
