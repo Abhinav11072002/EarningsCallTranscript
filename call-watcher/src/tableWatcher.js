@@ -105,7 +105,10 @@ async function extractRows(page) {
             return { text: found.text, href };
           };
 
-          const symbol = cell.text;
+          // The portal sometimes appends a trailing "^" badge to certain symbols (seen
+          // alongside its "Mismatch" data flag) - strip it so it never ends up written into
+          // the transcript's Symbol field or the dedupe key as if it were part of the ticker.
+          const symbol = cell.text.replace(/\^$/, '');
           if (!symbol) continue;
 
           const earningsDate = getVal('Earnings Date');
@@ -144,6 +147,47 @@ function parseCountdownToMinutes(text) {
   return d * 1440 + h * 60 + m + s / 60;
 }
 
+const MONTH_ABBR = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+const ABSOLUTE_DATETIME_PATTERN = /^(\d{4})\s+([A-Za-z]{3})\s+(\d{1,2})\s*-\s*(\d{1,2}):(\d{2}):(\d{2})/;
+
+// Determines America/New_York's current UTC offset (in minutes) for a given instant, via the
+// ICU timezone database (Intl) - handles the EST/EDT switch automatically, unlike a hardcoded
+// offset which would silently go an hour wrong every time DST changes.
+function nyOffsetMinutes(date) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const parts = {};
+  for (const p of dtf.formatToParts(date)) parts[p.type] = p.value;
+  const asIfUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  return (asIfUTC - date.getTime()) / 60000;
+}
+
+// The portal sometimes shows an absolute date-time instead of a live countdown - e.g.
+// "2026 Aug 27 - 09:00:00 AM" - seemingly for calls further out or not yet on a live countdown.
+// The hour is already 24-hour (values like "16:30:00 PM" appear), so the AM/PM suffix is
+// ignored; the value is treated as America/New_York local time, matching the epoch-in-EST
+// format used elsewhere in this table.
+function parseAbsoluteDateTimeToMinutes(text) {
+  const m = ABSOLUTE_DATETIME_PATTERN.exec((text || '').trim());
+  if (!m) return null;
+  const [, year, monthAbbr, day, hour, minute, second] = m;
+  const month = MONTH_ABBR[monthAbbr.toLowerCase()];
+  if (month === undefined) return null;
+
+  const naiveUTC = Date.UTC(+year, month, +day, +hour, +minute, +second);
+  const offsetMin = nyOffsetMinutes(new Date(naiveUTC));
+  const actualUTCms = naiveUTC - offsetMin * 60000;
+  return (actualUTCms - Date.now()) / 60000;
+}
+
 function minutesUntilCall(row) {
   if (row.transcriptionTimeEpoch) {
     const num = Number(row.transcriptionTimeEpoch);
@@ -152,7 +196,9 @@ function minutesUntilCall(row) {
       return (epochMs - Date.now()) / 60000;
     }
   }
-  return parseCountdownToMinutes(row.transcriptionTimeText);
+  const countdown = parseCountdownToMinutes(row.transcriptionTimeText);
+  if (countdown !== null) return countdown;
+  return parseAbsoluteDateTimeToMinutes(row.transcriptionTimeText);
 }
 
 function rowKey(row) {

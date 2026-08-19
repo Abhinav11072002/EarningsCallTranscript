@@ -67,6 +67,10 @@ async function main() {
   logger.info(`Watching table every ${config.pollIntervalMs}ms, threshold ${config.thresholdMinutes} min`);
 
   let pollCount = 0;
+  // Warn about an unparseable time once per distinct (row, text) combo, not every 20-second
+  // poll forever - a row stuck on a format we can't read would otherwise flood the log with
+  // an identical warning indefinitely.
+  const warnedUnparseable = new Set();
   const poll = async () => {
     let rows;
     try {
@@ -90,7 +94,11 @@ async function main() {
 
       const minsLeft = minutesUntilCall(row);
       if (minsLeft === null) {
-        logger.warn(`Could not parse time for ${row.symbol} ${row.fiscalPeriod}: "${row.transcriptionTimeText}"`);
+        const warnKey = `${key}|${row.transcriptionTimeText}`;
+        if (!warnedUnparseable.has(warnKey)) {
+          warnedUnparseable.add(warnKey);
+          logger.warn(`Could not parse time for ${row.symbol} ${row.fiscalPeriod}: "${row.transcriptionTimeText}"`);
+        }
         continue;
       }
 
