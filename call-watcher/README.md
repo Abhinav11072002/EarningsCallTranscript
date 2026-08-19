@@ -56,6 +56,27 @@ anything. `extensionTrigger.js` waits specifically for a stream-item matching *t
 `symbol - year period` label, which also guarantees the pipeline doesn't advance to the next
 call (and switch the active tab) until this one has genuinely started.
 
+## Truncated dial-in links
+
+The portal's frontend truncates long dial-in links for display - a real truncated string with
+a literal `"..."` baked into the actual `textContent`, confirmed by reading the raw DOM (not a
+CSS ellipsis, which wouldn't affect `textContent` at all). An API-based route to the full link
+was investigated and abandoned: the portal's own request to fetch this data carries a bearer
+token that lives only in the React app's in-memory state (not localStorage, sessionStorage,
+cookies, or IndexedDB), so it can't be reproduced from outside the page's own running JS
+without reverse-engineering intentionally-unexposed internals - fragile and not worth it.
+
+Instead, `dialinLinkClickResolver.js` clicks the cell directly on the live portal page: the
+React click handler evidently has the full URL in its own component state regardless of what's
+visibly truncated, and clicking it opens a new tab to the correct destination (confirmed live -
+clicking a truncated link manually and via this resolver both produced the identical full URL).
+Playwright's `element.click()` is required rather than a JS-triggered `el.click()` inside
+`page.evaluate()` - a synthetic click is often not trusted enough to get the resulting
+`window.open()` past Chrome's popup blocker, the same "needs a real gesture" pattern already
+seen with the extension's `getDisplayMedia()` call. The resolved URL is fed into the normal
+`resolveWebcastPage()` pipeline exactly as if it had been a normal, untruncated link all along -
+`index.js` only reaches for this when a row's `dialinLink` ends in `"..."`.
+
 ## Serialization
 
 Each due call's whole pipeline (resolve webcast link → handle registration → trigger extension)
@@ -135,8 +156,14 @@ Stop with **Ctrl+C**. Tabs already opened for in-flight calls are left open, not
 - `portalUrl` — the "In Call View" page to watch.
 - `cdpUrl` — Chrome's remote-debugging endpoint.
 - `pollIntervalMs` / `thresholdMinutes` — how often to check, and how soon "soon" means.
-- `popupTimeoutMs` — how long to wait for the popup to appear via CDP, and separately, how long
-  to wait for this row's own stream-item to be confirmed active.
+- `popupTimeoutMs` — how long to wait for the popup to appear via CDP after sending the
+  shortcut (the stream-item confirmation step afterward has its own separate 8s budget in
+  `extensionTrigger.js`, unaffected by this value). Set higher than you'd expect (18s) because
+  of a real observed failure: MV3 puts the extension's service worker to sleep after ~30s of
+  inactivity, and the first shortcut of a session can trigger a "cold start" (Chrome has to
+  spin the service worker back up before `background.js` even runs) that takes meaningfully
+  longer than a warm one - confirmed live, the first call in a session timed out at exactly 8s
+  while every subsequent call in the same run resolved in under a second.
 - `extensionShortcutSendKeys` — SendKeys-style syntax for the shortcut (`^+y` = Ctrl+Shift+Y,
   parsed by `send-shortcut.ps1` into actual `SendInput` key codes). Must match `manifest.json`'s
   `commands.trigger-transcription-popup.suggested_key`.
@@ -171,6 +198,16 @@ Stop with **Ctrl+C**. Tabs already opened for in-flight calls are left open, not
   portal's dial-in link lands. A genuinely new IR platform that's neither a known domain,
   obviously-worded, nor reachable via an obvious nav link may still need a new pattern (a
   warning is logged when nothing is recognized after all of the above).
+  Both the text-match and nav-link checks require the matched text to be under
+  `MAX_CTA_TEXT_LENGTH` (60 chars) - without it, a long footer/branding line that merely
+  *contains* a matching keyword (e.g. "Webcasting Platform Powered by ACCESS Newswire Inc. ©
+  Copyright 2026...") can match and send the resolver to a generic marketing page instead of
+  the real webcast, which the original link had already pointed to directly - seen live on a
+  real call. Be similarly careful adding new `knownDirectProviderDomains`: `q4cdn.com` looked
+  like a safe addition (Q4's platform) but turned out to also be Q4's generic file-hosting CDN,
+  causing a different real call to resolve to a PDF earnings presentation instead of its
+  webcast - only add a domain once it's confirmed to host webcast players specifically, not
+  just "some Q4/media-server/etc.-family domain."
 - `formFiller.js` matches common field naming/proximity patterns and falls back to a
   button-only click flow (for account-based gates like Q4); an unusual registration form may
   still need a new entry in `FIELD_PATTERNS` or `CTA_BUTTON_PATTERN`.

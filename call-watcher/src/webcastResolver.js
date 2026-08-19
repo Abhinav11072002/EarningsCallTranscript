@@ -7,6 +7,13 @@ const DIRECT_LINK_TEXT_PATTERN =
 // "presentations") to keep the one-hop detour it triggers rare when it'd just be wasted.
 const NAV_LINK_PATTERN = /investor relations|events?\s*(&|and)?\s*presentations?|webcasts?\b|earnings\s*(call|webcast)|news\s*(&|and)?\s*events?/i;
 const MAX_HOPS = 2; // the initial landing page, plus at most one navigational hop deeper
+// Legitimate call-to-action links ("Webcast", "Listen to the Webcast") are short. Long text
+// merely containing a matching keyword is almost always a footer/branding line, e.g. "Webcasting
+// Platform Powered by ACCESS Newswire Inc. (c) Copyright 2026 All Rights Reserved." - which
+// contains "webcast" (inside "Webcasting") but isn't a link to the actual call at all. Confirmed
+// live: this exact text matched and sent the resolver to a generic marketing page instead of the
+// real webcast, which the original dial-in link had already pointed to directly.
+const MAX_CTA_TEXT_LENGTH = 60;
 
 function hostnameMatches(url, domains) {
   try {
@@ -51,8 +58,8 @@ async function findEmbeddedProviderFrame(page, config) {
 async function findNavigationalLink(page) {
   const anchors = await page.$$('a[href]');
   for (const a of anchors) {
-    const text = (await a.innerText().catch(() => '')) || '';
-    if (!NAV_LINK_PATTERN.test(text)) continue;
+    const text = ((await a.innerText().catch(() => '')) || '').trim();
+    if (text.length > MAX_CTA_TEXT_LENGTH || !NAV_LINK_PATTERN.test(text)) continue;
     const href = await a.getAttribute('href').catch(() => null);
     if (!href) continue;
     return new URL(href, page.url()).toString();
@@ -85,10 +92,10 @@ async function tryResolveOnCurrentPage(page, config, logger) {
 
   const candidates = await page.$$('a, button');
   for (const el of candidates) {
-    const text = (await el.innerText().catch(() => '')) || '';
-    if (!DIRECT_LINK_TEXT_PATTERN.test(text)) continue;
+    const text = ((await el.innerText().catch(() => '')) || '').trim();
+    if (text.length > MAX_CTA_TEXT_LENGTH || !DIRECT_LINK_TEXT_PATTERN.test(text)) continue;
 
-    logger.info(`Found candidate webcast link via text match: "${text.trim()}"`);
+    logger.info(`Found candidate webcast link via text match: "${text}"`);
     const href = await el.getAttribute('href').catch(() => null);
     if (href) {
       await page.goto(new URL(href, page.url()).toString(), { waitUntil: 'domcontentloaded', timeout: 30000 });

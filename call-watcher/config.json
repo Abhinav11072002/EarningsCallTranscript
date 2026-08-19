@@ -3,7 +3,7 @@
   "cdpUrl": "http://localhost:9222",
   "pollIntervalMs": 20000,
   "thresholdMinutes": 15,
-  "popupTimeoutMs": 8000,
+  "popupTimeoutMs": 18000,
   "extensionShortcutSendKeys": "^+y",
   "extensionId": "ajemmhlcfahhacllbjofkbbeageaedia",
   "dummyIdentity": {
@@ -23,7 +23,6 @@
     "streamgate.com.au",
     "zoom.us",
     "q4inc.com",
-    "q4cdn.com",
     "notified.com",
     "on24.com"
   ]
