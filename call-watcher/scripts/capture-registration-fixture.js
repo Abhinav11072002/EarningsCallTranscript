@@ -3,7 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
-const config = require('../config.json');
+const { loadConfig } = require('../src/loadConfig');
+
+const config = loadConfig();
 
 const provider = process.argv[2];
 const urlFragment = process.argv[3] || '';

@@ -7,7 +7,7 @@
   "maxAttempts": 4,
   "popupTimeoutMs": 18000,
   "extensionShortcutSendKeys": "^+y",
-  "extensionId": "dlfmachedhgcdhikogeppedjolfnjcgi",
+  "extensionId": null,
   "dummyIdentity": {
     "firstName": "nocos",
     "lastName": "nojcsd",

@@ -2,7 +2,9 @@
 const http = require('http');
 const { chromium } = require('playwright-core');
 const { resolveWebcastPage } = require('../src/webcastResolver');
-const config = require('../config.json');
+const { loadConfig } = require('../src/loadConfig');
+
+const config = loadConfig();
 
 function startServer() {
   return new Promise((resolve) => {

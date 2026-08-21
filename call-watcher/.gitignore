@@ -1,3 +1,8 @@
 node_modules/
 data/*.log
 data/processed.json
+
+# Machine-specific config overrides (e.g. extensionId, which Chrome derives from the
+# extension's install path and therefore differs per machine/profile). Never commit this -
+# sharing it is exactly what makes two machines overwrite each other's IDs on every pull.
+config.local.json

@@ -187,11 +187,33 @@ Stop with **Ctrl+C**. Tabs already opened for in-flight calls are left open, not
 - `extensionShortcutSendKeys` — SendKeys-style syntax for the shortcut (`^+y` = Ctrl+Shift+Y,
   parsed by `send-shortcut.ps1` into actual `SendInput` key codes). Must match `manifest.json`'s
   `commands.trigger-transcription-popup.suggested_key`.
-- `extensionId` — leave `null` to auto-detect from the extension's service worker; set manually
-  (from `chrome://extensions`) if auto-detection ever fails.
+- `extensionId` — **machine-specific; set this in `config.local.json`, not here.** Chrome
+  derives an unpacked extension's ID from its install path, so every machine/profile gets a
+  different one. Committed as `null` on purpose: auto-detection from the running service worker
+  is attempted first, but MV3 workers sleep when idle, so a dormant worker looks identical to a
+  missing extension - which is exactly why setting it explicitly per machine is more reliable.
 - `dummyIdentity` — values used to fill webcast registration gates.
 - `knownDirectProviderDomains` — hostnames treated as already being the real webcast page,
   skipping the "find the real link" heuristic. Add new providers here as they come up.
+
+### Machine-specific overrides (`config.local.json`)
+
+`src/loadConfig.js` shallow-merges an optional, gitignored `config.local.json` over
+`config.json`, so per-machine settings never travel through git. This matters most for
+`extensionId`: with it committed, two machines pushing to the same repo overwrite each other's
+value on every pull, silently breaking the extension-trigger step until someone notices.
+
+Create one per machine (get the ID from `chrome://extensions`):
+
+```json
+{
+  "extensionId": "your-machines-extension-id-here"
+}
+```
+
+Any top-level key works, so this is also the right place for temporary local tweaks like a
+raised `thresholdMinutes` while testing - keeping the committed default at the production value
+instead of accidentally pushing a test setting.
 
 ## Known rough edges
 

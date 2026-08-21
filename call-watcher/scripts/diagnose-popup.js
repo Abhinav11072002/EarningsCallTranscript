@@ -4,7 +4,9 @@
 // this tells us definitively whether Playwright's page-tracking sees the popup at all, since
 // extension action popups can be a different kind of CDP target than a regular tab.
 const { chromium } = require('playwright-core');
-const config = require('../config.json');
+const { loadConfig } = require('../src/loadConfig');
+
+const config = loadConfig();
 
 (async () => {
   const browser = await chromium.connectOverCDP(config.cdpUrl);

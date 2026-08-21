@@ -4,7 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
 const { fillRegistrationForm } = require('../src/formFiller');
-const config = require('../config.json');
+const { loadConfig } = require('../src/loadConfig');
+
+const config = loadConfig();
 
 const fixtureDir = path.join(__dirname, '..', 'test', 'fixtures', 'registration');
 const fixtures = ['zoom.html', 'q4.html', 'webcaster.html', 'choruscall.html', 'on24.html'];

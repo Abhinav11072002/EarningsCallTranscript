@@ -2,7 +2,9 @@
 // the dedupe store, registration, or extension pipeline. Usage:
 //   node scripts/test-click-resolver.js BULL
 const { chromium } = require('playwright-core');
-const config = require('../config.json');
+const { loadConfig } = require('../src/loadConfig');
+
+const config = loadConfig();
 const { resolveDialinLinkByClick } = require('../src/dialinLinkClickResolver');
 
 const symbol = process.argv[2];

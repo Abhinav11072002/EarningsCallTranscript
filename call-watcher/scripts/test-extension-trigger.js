@@ -11,7 +11,9 @@
 // Usage: node scripts/test-extension-trigger.js <SYMBOL> <YEAR> <PERIOD>
 // e.g.:  node scripts/test-extension-trigger.js TEST 2026 Q1
 const { chromium } = require('playwright-core');
-const config = require('../config.json');
+const { loadConfig } = require('../src/loadConfig');
+
+const config = loadConfig();
 const { triggerExtension } = require('../src/extensionTrigger');
 
 const [symbol, year, period] = process.argv.slice(2);

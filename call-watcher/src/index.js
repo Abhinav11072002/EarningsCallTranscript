@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const config = require('../config.json');
+const { loadConfig } = require('./loadConfig');
 const { StateStore } = require('./stateStore');
 const { extractRows, minutesUntilCall, rowKey } = require('./tableWatcher');
 const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
@@ -9,6 +9,8 @@ const { fillRegistrationForm } = require('./formFiller');
 const { triggerExtension, hasActiveStream } = require('./extensionTrigger');
 const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
 const { pruneOldLogLines } = require('./logRotation');
+
+const config = loadConfig();
 
 const LOG_PATH = path.join(__dirname, '..', 'data', 'call-watcher.log');
 const LOG_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour - keeps the log from growing forever
