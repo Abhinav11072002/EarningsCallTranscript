@@ -5,7 +5,10 @@
   "description": "Watches the FMP admin earnings-call table and auto-joins + starts transcription for calls starting soon.",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test:registration": "node scripts/test-form-filler.js",
+    "test:resolver": "node scripts/test-webcast-resolver.js",
+    "capture:registration": "node scripts/capture-registration-fixture.js"
   },
   "dependencies": {
     "playwright-core": "^1.47.2"

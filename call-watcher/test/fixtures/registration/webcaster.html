@@ -1,0 +1,17 @@
+<!doctype html>
+<html><body>
+  <h1>Event registration</h1>
+  <form id="registration">
+    <input name="givenName" placeholder="Given name">
+    <input name="familyName" placeholder="Family name">
+    <input name="contactEmail" aria-label="Email">
+    <input name="organization" autocomplete="organization">
+    <button type="submit">Submit</button>
+  </form>
+  <p id="result" hidden>Thank you for registering</p>
+  <script>
+    registration.onsubmit = (event) => {
+      event.preventDefault(); registration.hidden = true; result.hidden = false;
+    };
+  </script>
+</body></html>

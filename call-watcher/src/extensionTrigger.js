@@ -27,6 +27,8 @@ function sendGlobalShortcut(sendKeysSequence, cdpUrl, titleHint, logger) {
 }
 
 async function getExtensionId(context, config) {
+  // MV3 service workers sleep when idle, so an unloaded worker is not evidence that
+  // the extension is missing. Prefer the stable ID of the unpacked extension.
   if (config.extensionId) return config.extensionId;
   const workers = context.serviceWorkers();
   for (const w of workers) {
@@ -37,6 +39,28 @@ async function getExtensionId(context, config) {
     'Could not auto-detect the extension ID from its service worker. ' +
       'Set "extensionId" in config.json manually (copy it from chrome://extensions).'
   );
+}
+
+async function hasActiveStream(context, config, row) {
+  const extensionId = await getExtensionId(context, config);
+  const page = await context.newPage();
+  try {
+    await page.goto(`chrome-extension://${extensionId}/options.html`);
+    return await page.evaluate(({ symbol, fiscalPeriod }) => {
+      const match = /^(\d{4})(.*)$/.exec((fiscalPeriod || '').trim());
+      const year = match ? match[1] : '';
+      const period = match ? match[2].trim() : '';
+      return new Promise((resolve) => {
+        chrome.storage.local.get(['activeStreams'], ({ activeStreams = [] }) => {
+          resolve(activeStreams.some((stream) =>
+            stream.symbol === symbol && stream.year === year && stream.period === period
+          ));
+        });
+      });
+    }, { symbol: row.symbol, fiscalPeriod: row.fiscalPeriod });
+  } finally {
+    await page.close();
+  }
 }
 
 // Confirmed by direct testing (scripts/diagnose-popup.js): the popup opens visibly and is
@@ -187,4 +211,4 @@ async function triggerExtension(context, targetPage, row, config, logger) {
   }
 }
 
-module.exports = { triggerExtension, splitFiscalPeriod };
+module.exports = { triggerExtension, splitFiscalPeriod, hasActiveStream };

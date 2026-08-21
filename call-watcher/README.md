@@ -137,6 +137,18 @@ cd call-watcher
 npm install
 ```
 
+Run the provider registration fixture suite against the already-running debug Chrome with:
+
+```powershell
+npm run test:registration
+```
+
+To preserve a real provider layout for regression testing, open its registration page in the
+debug Chrome and run `npm run capture:registration -- zoom provider.example`. The optional
+fragment selects the matching tab. The capture stores frame URLs and sanitized HTML under
+`test/fixtures/captured/<provider>/page.json`; input values, emails, phone numbers, tokens,
+and API-key fields are redacted before writing.
+
 ## Running
 
 ```powershell
@@ -145,9 +157,13 @@ npm start
 
 This connects to the already-running Chrome, opens (or reuses) a tab on the portal URL from
 `config.json`, and polls the table every `pollIntervalMs`. Logs go to the console and to
-`data/call-watcher.log`. Processed calls are recorded in `data/processed.json` so restarts don't
-re-join a call that's already been handled - delete that file to force reprocessing (e.g. while
-testing).
+`data/call-watcher.log`. Each call log includes the pipeline duration and current queue depth.
+If Chrome or the portal tab disconnects, the watcher reconnects and resumes on the next poll.
+Calls are recorded in `data/processed.json` to prevent duplicate work,
+but each due call is reconciled against the extension's live `activeStreams` storage. If its
+matching stream was stopped with the popup's `X` button, or processing failed before a stream
+was created, the old claim is removed and the call is retried. Delete `data/processed.json` to
+force reprocessing of every eligible call (e.g. while testing).
 
 Stop with **Ctrl+C**. Tabs already opened for in-flight calls are left open, not force-closed.
 
@@ -156,6 +172,10 @@ Stop with **Ctrl+C**. Tabs already opened for in-flight calls are left open, not
 - `portalUrl` — the "In Call View" page to watch.
 - `cdpUrl` — Chrome's remote-debugging endpoint.
 - `pollIntervalMs` / `thresholdMinutes` — how often to check, and how soon "soon" means.
+- `retryWindowMinutes` — how long after the scheduled start a call remains eligible for
+  reacquisition when its matching extension stream was manually stopped or never started.
+- `maxAttempts` — maximum automatic attempts after a failed pipeline; retries use bounded
+  exponential backoff so one broken provider cannot consume the queue indefinitely.
 - `popupTimeoutMs` — how long to wait for the popup to appear via CDP after sending the
   shortcut (the stream-item confirmation step afterward has its own separate 8s budget in
   `extensionTrigger.js`, unaffected by this value). Set higher than you'd expect (18s) because

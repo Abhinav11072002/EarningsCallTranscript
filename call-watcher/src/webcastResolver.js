@@ -5,7 +5,7 @@ const DIRECT_LINK_TEXT_PATTERN =
 // contain the real webcast link (e.g. an "Investor Relations" or "Events" nav item), not the
 // call link itself. Deliberately requires fairly specific phrasing (not bare "investors" or
 // "presentations") to keep the one-hop detour it triggers rare when it'd just be wasted.
-const NAV_LINK_PATTERN = /investor relations|events?\s*(&|and)?\s*presentations?|webcasts?\b|earnings\s*(call|webcast)|news\s*(&|and)?\s*events?/i;
+const NAV_LINK_PATTERN = /investor relations|events?(?:\s*(?:&|and)\s*presentations?)?|webcasts?\b|earnings\s*(call|webcast)|news\s*(&|and)?\s*events?/i;
 const MAX_HOPS = 2; // the initial landing page, plus at most one navigational hop deeper
 // Legitimate call-to-action links ("Webcast", "Listen to the Webcast") are short. Long text
 // merely containing a matching keyword is almost always a footer/branding line, e.g. "Webcasting
@@ -117,6 +117,9 @@ async function tryResolveOnCurrentPage(page, config, logger) {
 async function resolveWebcastPage(context, dialinUrl, config, logger) {
   const page = await context.newPage();
   await page.goto(dialinUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  // Provider shells often render the registration form or iframe after the initial document
+  // event. Give their client-side bootstrap a short window before classifying the page.
+  await page.waitForTimeout(1000);
 
   for (let hop = 0; hop < MAX_HOPS; hop++) {
     const resolved = await tryResolveOnCurrentPage(page, config, logger);

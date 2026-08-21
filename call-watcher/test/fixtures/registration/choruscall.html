@@ -1,0 +1,20 @@
+<!doctype html>
+<html><body>
+  <h1>Conference registration</h1>
+  <form id="registration">
+    <label for="full">Full name</label><input id="full" name="full_name">
+    <label for="mail">Email</label><input id="mail" name="email" type="email">
+    <label for="phone">Telephone</label><input id="phone" name="telephone">
+    <label for="org">Organization</label><input id="org" name="organization">
+    <label><input id="privacy" type="checkbox" required> I agree to the privacy policy</label>
+    <button type="submit">Enter conference</button>
+  </form>
+  <p id="result" hidden>Registered for conference</p>
+  <script>
+    registration.onsubmit = (event) => {
+      event.preventDefault();
+      if (!privacy.checked) return;
+      registration.hidden = true; result.hidden = false;
+    };
+  </script>
+</body></html>

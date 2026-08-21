@@ -1,0 +1,15 @@
+<!doctype html>
+<html><body>
+  <h1>ON24 event</h1>
+  <iframe id="registration-frame" srcdoc='<!doctype html><html><body>
+    <form id="registration">
+      <label for="fn">First name</label><input id="fn" autocomplete="given-name">
+      <label for="ln">Last name</label><input id="ln" autocomplete="family-name">
+      <label for="em">Email</label><input id="em" autocomplete="email" type="email">
+      <label for="co">Company</label><input id="co" autocomplete="organization">
+      <button type="submit">Register for event</button>
+    </form>
+    <p id="result" hidden>Registration complete</p>
+    <script>registration.onsubmit=(event)=>{event.preventDefault();registration.hidden=true;result.hidden=false;};</script>
+  </body></html>'></iframe>
+</body></html>

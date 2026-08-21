@@ -1,0 +1,19 @@
+<!doctype html>
+<html><body>
+  <h1>Q4 Platform</h1>
+  <button id="account">Register with a Q4 Account</button>
+  <form id="registration" hidden>
+    <label>First Name <input name="q0"></label>
+    <label>Last Name * First Name <input name="q1"></label>
+    <label>Company * Last Name <input name="q2"></label>
+    <label>E-mail * Company <input name="q3" type="email"></label>
+    <button type="submit">Register for event</button>
+  </form>
+  <p id="result" hidden>Registration complete</p>
+  <script>
+    account.onclick = () => { account.hidden = true; registration.hidden = false; };
+    registration.onsubmit = (event) => {
+      event.preventDefault(); registration.hidden = true; result.hidden = false;
+    };
+  </script>
+</body></html>

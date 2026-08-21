@@ -29,6 +29,7 @@ const logger = {
 (async () => {
   const browser = await chromium.connectOverCDP(config.cdpUrl);
   const context = browser.contexts()[0];
+  context.on('dialog', (dialog) => dialog.dismiss().catch(() => {}));
   const portalPage = context.pages().find((p) => p.url().includes('financialmodelingprep.com'));
 
   if (!portalPage) {

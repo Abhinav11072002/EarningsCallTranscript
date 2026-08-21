@@ -1,0 +1,14 @@
+<!doctype html>
+<html><body>
+  <h1>Registration validation</h1>
+  <form id="registration">
+    <label>First name <input name="firstName"></label>
+    <label>Last name <input name="lastName"></label>
+    <label>Email <input name="email"></label>
+    <button type="submit">Register for event</button>
+  </form>
+  <p id="error" hidden>Email is not accepted for this event.</p>
+  <script>
+    registration.onsubmit = (event) => { event.preventDefault(); error.hidden = false; };
+  </script>
+</body></html>

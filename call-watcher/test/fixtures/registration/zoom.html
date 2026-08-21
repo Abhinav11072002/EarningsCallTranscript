@@ -1,0 +1,18 @@
+<!doctype html>
+<html><body>
+  <h1>Register for webinar</h1>
+  <form id="registration">
+    <label for="first">First name</label><input id="first" name="first_name">
+    <label for="last">Last name</label><input id="last" name="last_name">
+    <label for="email">Email address</label><input id="email" name="email_address" type="email">
+    <label for="company">Company</label><input id="company" name="company_name">
+    <label><input id="terms" type="checkbox"> I agree to the terms and privacy policy</label>
+    <button type="submit">Register for webinar</button>
+  </form>
+  <p id="result" hidden>Registration complete</p>
+  <script>
+    registration.onsubmit = (event) => {
+      event.preventDefault(); registration.hidden = true; result.hidden = false;
+    };
+  </script>
+</body></html>

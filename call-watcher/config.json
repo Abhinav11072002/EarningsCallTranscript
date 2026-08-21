@@ -3,9 +3,11 @@
   "cdpUrl": "http://localhost:9222",
   "pollIntervalMs": 20000,
   "thresholdMinutes": 15,
+  "retryWindowMinutes": 120,
+  "maxAttempts": 4,
   "popupTimeoutMs": 18000,
   "extensionShortcutSendKeys": "^+y",
-  "extensionId": "ajemmhlcfahhacllbjofkbbeageaedia",
+  "extensionId": "dlfmachedhgcdhikogeppedjolfnjcgi",
   "dummyIdentity": {
     "firstName": "nocos",
     "lastName": "nojcsd",

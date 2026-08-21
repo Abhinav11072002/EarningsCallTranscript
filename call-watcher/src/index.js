@@ -6,13 +6,20 @@ const { extractRows, minutesUntilCall, rowKey } = require('./tableWatcher');
 const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
-const { triggerExtension } = require('./extensionTrigger');
+const { triggerExtension, hasActiveStream } = require('./extensionTrigger');
 const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
 const { pruneOldLogLines } = require('./logRotation');
 
 const LOG_PATH = path.join(__dirname, '..', 'data', 'call-watcher.log');
 const LOG_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour - keeps the log from growing forever
 const LOG_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
+const RECONNECT_DELAY_MS = 10000;
+const RETRY_BASE_DELAY_MS = 30000;
+const RETRY_MAX_DELAY_MS = 10 * 60 * 1000;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function makeLogger() {
   fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
@@ -39,17 +46,23 @@ function makeLogger() {
 // ever back up meaningfully behind this queue, that's a sign to reconsider - but correctness
 // per call matters more here than throughput.
 let pipelineQueue = Promise.resolve();
+let queuedPipelines = 0;
 function withPipelineLock(fn) {
-  const result = pipelineQueue.then(fn, fn);
+  queuedPipelines++;
+  const run = () => fn().finally(() => queuedPipelines--);
+  const result = pipelineQueue.then(run, run);
   pipelineQueue = result.catch(() => {});
   return result;
 }
 
 // Queued (not awaited) from the poll loop, so poll() keeps scanning for newly-due rows while
-// this one waits its turn; the dedupe store already claimed the row before this was called.
-function processRow(context, portalPage, row, logger) {
+// this one waits its turn; the dedupe store claims the row before this is called.
+function processRow(context, portalPage, row, key, store, logger) {
   return withPipelineLock(async () => {
-    logger.info(`Due: ${row.symbol} ${row.fiscalPeriod} (${row.transcriptionTimeText}) -> ${row.dialinLink}`);
+    const startedAt = Date.now();
+    let page;
+    let transcriptionStarted = false;
+    logger.info(`Due: ${row.symbol} ${row.fiscalPeriod} (${row.transcriptionTimeText}) -> ${row.dialinLink} [queue=${queuedPipelines}]`);
     try {
       // The portal truncates long dial-in links for display (a real truncated string, not
       // just CSS - see tableWatcher.js), but clicking the cell live opens a new tab to the
@@ -61,12 +74,23 @@ function processRow(context, portalPage, row, logger) {
         dialinLink = await resolveDialinLinkByClick(context, portalPage, row.symbol, logger);
       }
 
-      const page = await resolveWebcastPage(context, dialinLink, config, logger);
-      await fillRegistrationForm(page, config.dummyIdentity, logger);
+      page = await resolveWebcastPage(context, dialinLink, config, logger);
+      const registration = await fillRegistrationForm(page, config.dummyIdentity, logger);
+      if (registration.pending) {
+        const detail = registration.error ? `: ${registration.error}` : '';
+        throw new Error(`Registration gate still appears active after filling and submission attempts${detail}`);
+      }
       await triggerExtension(context, page, row, config, logger);
-      logger.info(`Done: ${row.symbol} ${row.fiscalPeriod}`);
+      transcriptionStarted = true;
+      store.markStarted(key);
+      logger.info(`Done: ${row.symbol} ${row.fiscalPeriod} (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
     } catch (err) {
       logger.error(`Failed processing ${row.symbol} ${row.fiscalPeriod}: ${err.message}`);
+      const attempts = store.get(key)?.attempts || 1;
+      const retryDelay = Math.min(RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1), RETRY_MAX_DELAY_MS);
+      store.fail(key, err.message, retryDelay);
+    } finally {
+      if (page && !transcriptionStarted) await page.close().catch(() => {});
     }
   });
 }
@@ -75,9 +99,24 @@ async function main() {
   const logger = makeLogger();
   const store = new StateStore(path.join(__dirname, '..', 'data', 'processed.json'));
 
-  logger.info('Connecting to Chrome...');
-  const { context } = await connectToChrome(config.cdpUrl);
-  const portalPage = await getOrOpenPortalPage(context, config.portalUrl);
+  let browser;
+  let context;
+  let portalPage;
+  const reconnect = async () => {
+    const connection = await connectToChrome(config.cdpUrl);
+    browser = connection.browser;
+    context = connection.context;
+    portalPage = await getOrOpenPortalPage(context, config.portalUrl);
+  };
+  while (true) {
+    try {
+      await reconnect();
+      break;
+    } catch (err) {
+      logger.warn(`Chrome is unavailable; retrying in ${RECONNECT_DELAY_MS / 1000}s: ${err.message}`);
+      await delay(RECONNECT_DELAY_MS);
+    }
+  }
   logger.info(`Portal tab URL: ${portalPage.url()}`);
   logger.info(`Watching table every ${config.pollIntervalMs}ms, threshold ${config.thresholdMinutes} min`);
 
@@ -86,13 +125,31 @@ async function main() {
   // poll forever - a row stuck on a format we can't read would otherwise flood the log with
   // an identical warning indefinitely.
   const warnedUnparseable = new Set();
+  let pollRunning = false;
   const poll = async () => {
+    if (pollRunning) {
+      logger.warn('Skipping overlapping poll; previous poll is still running.');
+      return;
+    }
+    pollRunning = true;
+    try {
     let rows;
     try {
       rows = await extractRows(portalPage);
     } catch (err) {
-      logger.error(`Failed reading table: ${err.message}`);
-      return;
+      if (!/target page, context or browser has been closed/i.test(err.message)) {
+        logger.error(`Failed reading table: ${err.message}`);
+        return;
+      }
+      logger.warn('Browser session or portal page closed; reconnecting and resuming table polling.');
+      try {
+        await browser.close().catch(() => {});
+        await reconnect();
+        rows = await extractRows(portalPage);
+      } catch (recoveryError) {
+        logger.error(`Failed reconnecting to Chrome: ${recoveryError.message}`);
+        return;
+      }
     }
 
     pollCount++;
@@ -105,8 +162,7 @@ async function main() {
       if (!row.dialinLink) continue;
 
       const key = rowKey(row);
-      if (store.has(key)) continue;
-
+      const record = store.get(key);
       const minsLeft = minutesUntilCall(row);
       if (minsLeft === null) {
         const warnKey = `${key}|${row.transcriptionTimeText}`;
@@ -117,12 +173,37 @@ async function main() {
         continue;
       }
 
-      // Lower bound guards against re-triggering on a call that already started a while ago
-      // (e.g. after a restart) where the countdown has gone negative.
-      if (minsLeft <= config.thresholdMinutes && minsLeft > -5) {
-        store.add(key); // claim immediately so the next poll (20s later) doesn't double-process
-        processRow(context, portalPage, row, logger);
+      // Keep a configurable post-start retry window so a manually stopped transcription can
+      // be reacquired during a long call without replaying calls from previous days.
+      const retryWindowMinutes = Number(config.retryWindowMinutes ?? 5);
+      if (minsLeft <= config.thresholdMinutes && minsLeft > -retryWindowMinutes) {
+        if (record) {
+          let active;
+          try {
+            active = await hasActiveStream(context, config, row);
+          } catch (err) {
+            logger.warn(`Could not check active transcription for ${row.symbol} ${row.fiscalPeriod}: ${err.message}`);
+            continue;
+          }
+          if (active) {
+            if (record.status !== 'started') store.markStarted(key);
+            continue;
+          }
+          if (record.status === 'started') {
+            store.remove(key);
+            logger.info(`No active transcription found for ${row.symbol} ${row.fiscalPeriod}; allowing retry.`);
+          } else if (!store.retryDue(key) || record.attempts >= Number(config.maxAttempts ?? 4)) {
+            continue;
+          } else {
+            store.remove(key);
+          }
+        }
+        store.claim(key); // claim immediately so the next poll does not double-process
+        processRow(context, portalPage, row, key, store, logger);
       }
+    }
+    } finally {
+      pollRunning = false;
     }
   };
 
