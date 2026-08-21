@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- A spam honeypot that must stay empty (filling it can get the registration rejected), plus
+     disabled and readonly fields the filler must skip without erroring out. -->
+<html><body>
+  <h1>Register</h1>
+  <form id="registration">
+    <label for="fn">First name</label><input id="fn" data-expect="firstName">
+    <label for="ln">Last name</label><input id="ln" data-expect="lastName">
+    <label for="em">Email</label><input id="em" type="email" data-expect="email">
+    <label for="co">Company</label><input id="co" data-expect="company">
+    <!-- offscreen honeypot, still technically visible to CSS -->
+    <div style="position:absolute;left:-9999px">
+      <label for="hp">Email confirm</label><input id="hp" name="email_confirm_hp" data-expect="none">
+    </div>
+    <label for="acct">Account number</label><input id="acct" name="phone_account" disabled>
+    <label for="ref">Reference</label><input id="ref" name="company_ref" readonly value="LOCKED">
+    <button type="submit">Register for event</button>
+  </form>
+  <p id="result" hidden>Registration complete</p>
+  <script>registration.onsubmit=(e)=>{e.preventDefault();registration.hidden=true;result.hidden=false;};</script>
+</body></html>

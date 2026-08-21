@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- Submission is blocked until a required consent box is ticked. -->
+<html><body>
+  <h1>Register for the call</h1>
+  <form id="registration">
+    <label for="fn">First name</label><input id="fn" data-expect="firstName">
+    <label for="ln">Last name</label><input id="ln" data-expect="lastName">
+    <label for="em">Email</label><input id="em" type="email" data-expect="email">
+    <label for="co">Company</label><input id="co" data-expect="company">
+    <label><input id="terms" type="checkbox"> I agree to the terms and privacy policy</label>
+    <button type="submit">Attend</button>
+  </form>
+  <p id="err" hidden>You must agree to the terms - this field is required.</p>
+  <p id="result" hidden>Registration complete</p>
+  <script>
+    registration.onsubmit=(e)=>{
+      e.preventDefault();
+      if(!terms.checked){err.hidden=false;return;}
+      registration.hidden=true;result.hidden=false;
+    };
+  </script>
+</body></html>

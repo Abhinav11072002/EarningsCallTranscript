@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Two-screen flow: identity first, then a separate confirm step. The filler must act across
+     both without a human, which is the Q4-style pattern generalised. -->
+<html><body>
+  <h1>Event access</h1>
+  <div id="step1">
+    <div><label for="fn">First name</label><input id="fn" data-expect="firstName"></div>
+    <div><label for="ln">Last name</label><input id="ln" data-expect="lastName"></div>
+    <div><label for="em">Email</label><input id="em" type="email" data-expect="email"></div>
+    <div><label for="co">Company</label><input id="co" data-expect="company"></div>
+    <button id="nextBtn" type="button">Continue</button>
+  </div>
+  <div id="step2" hidden>
+    <p>Confirm your attendance.</p>
+    <button id="confirmBtn" type="button">Register for event</button>
+  </div>
+  <p id="result" hidden>Registration complete</p>
+  <script>
+    document.getElementById('nextBtn').onclick = () => {
+      document.getElementById('step1').hidden = true;
+      document.getElementById('step2').hidden = false;
+    };
+    document.getElementById('confirmBtn').onclick = () => {
+      document.getElementById('step2').hidden = true;
+      document.getElementById('result').hidden = false;
+    };
+  </script>
+</body></html>

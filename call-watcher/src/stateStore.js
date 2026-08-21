@@ -74,7 +74,24 @@ class StateStore {
   markStarted(key) {
     const record = this.records.get(key);
     if (!record) return;
-    this.records.set(key, { ...record, status: 'started', updatedAt: new Date().toISOString() });
+    // absentObservations is cleared on purpose: the stream being visible again means any earlier
+    // absence was a blip, and a stale tally must not accumulate toward "the call has finished".
+    this.records.set(key, {
+      ...record,
+      status: 'started',
+      absentObservations: 0,
+      updatedAt: new Date().toISOString(),
+    });
+    this._save();
+  }
+
+  // Counts consecutive polls on which the extension did not list this call's stream. Used to
+  // require confirmation before treating a call as finished, because the storage list can be
+  // cleared mid-call by an extension reload and acting on one reading would end a live capture.
+  noteAbsent(key, absences) {
+    const record = this.records.get(key);
+    if (!record) return;
+    this.records.set(key, { ...record, absentObservations: absences, updatedAt: new Date().toISOString() });
     this._save();
   }
 

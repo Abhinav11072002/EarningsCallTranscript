@@ -1,0 +1,14 @@
+<!doctype html>
+<!-- Labels are plain block text directly above each input with NO for=/wrapping association -
+     the real CSL Limited shape that forced the geometric nearest-text fallback in
+     describeField(). Each field is in its own row so the association is unambiguous. -->
+<html><body style="margin:0;font:14px sans-serif">
+  <h1>Conference registration</h1>
+  <div style="margin-bottom:18px"><div>First name *</div><input name="fn" data-expect="firstName"></div>
+  <div style="margin-bottom:18px"><div>Last name *</div><input name="ln" data-expect="lastName"></div>
+  <div style="margin-bottom:18px"><div>E-mail *</div><input name="em" type="email" data-expect="email"></div>
+  <div style="margin-bottom:18px"><div>Company *</div><input name="co" data-expect="company"></div>
+  <form id="registration"><button type="submit">Submit</button></form>
+  <p id="result" hidden>Registration complete</p>
+  <script>registration.onsubmit=(e)=>{e.preventDefault();result.hidden=false;};</script>
+</body></html>

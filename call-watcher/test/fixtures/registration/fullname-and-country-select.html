@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- Single "Name" field (not first/last) plus a country <select> and a phone field. -->
+<html><body>
+  <h1>Register to attend</h1>
+  <form id="registration">
+    <label for="nm">Your Name</label><input id="nm" data-expect="fullName">
+    <label for="em">E-mail Address</label><input id="em" type="email" data-expect="email">
+    <label for="ph">Telephone</label><input id="ph" data-expect="phone">
+    <label for="org">Organisation</label><input id="org" data-expect="company">
+    <label for="cty">Country</label>
+    <select id="cty" data-expect="country">
+      <option value="">Please select</option>
+      <option>United Kingdom</option>
+      <option>USA</option>
+      <option>Germany</option>
+    </select>
+    <button type="submit">Register</button>
+  </form>
+  <p id="result" hidden>Registration complete</p>
+  <script>registration.onsubmit=(e)=>{e.preventDefault();registration.hidden=true;result.hidden=false;};</script>
+</body></html>

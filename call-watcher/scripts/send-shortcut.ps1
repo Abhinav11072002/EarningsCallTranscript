@@ -236,6 +236,17 @@ Write-Output "SendInput injected $sent of $($sequence.Length) events for keys: $
 # never released), so the command almost certainly did not fire - and a stuck modifier would
 # then corrupt the user's own typing. Previously this was printed and ignored.
 if ($sent -ne $sequence.Length) {
-    Write-Error "SendInput injected only $sent of $($sequence.Length) events - the shortcut did not fire cleanly."
+    # A partial injection means the TAIL was dropped - and the tail is the key-ups. Ctrl/Shift
+    # would stay physically down at the OS level, turning every subsequent keystroke by anyone
+    # on this machine into a shortcut, with nothing in Node able to recover it. Release them
+    # explicitly before failing.
+    $release = @(
+        [NativeMethods]::KeyInput($vkKey, $true),
+        [NativeMethods]::KeyInput([NativeMethods]::VK_CONTROL, $true),
+        [NativeMethods]::KeyInput([NativeMethods]::VK_SHIFT, $true),
+        [NativeMethods]::KeyInput([NativeMethods]::VK_MENU, $true)
+    )
+    [NativeMethods]::SendInput([uint32]$release.Length, $release, $inputSize) | Out-Null
+    Write-Error "SendInput injected only $sent of $($sequence.Length) events - the shortcut did not fire cleanly. Modifier keys were force-released."
     exit 3
 }

@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- No <label> elements at all: one field is described only by aria-label, the others only by
+     placeholder. Providers using custom design systems frequently do this. -->
+<html><body>
+  <h1>Webcast registration</h1>
+  <form id="registration">
+    <input aria-label="First name" data-expect="firstName">
+    <input placeholder="Last name" data-expect="lastName">
+    <input placeholder="Email address" type="email" data-expect="email">
+    <input aria-label="Company name" data-expect="company">
+    <button type="submit">Submit</button>
+  </form>
+  <p id="result" hidden>Registration complete</p>
+  <script>registration.onsubmit=(e)=>{e.preventDefault();registration.hidden=true;result.hidden=false;};</script>
+</body></html>

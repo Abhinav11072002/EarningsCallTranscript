@@ -1,0 +1,14 @@
+<!doctype html>
+<!-- A password login wall. There is no self-service registration: the correct outcome is to
+     FAIL LOUDLY (pending) rather than pretend the call was joined, because recording a login
+     page produces a silent empty transcript. -->
+<html><body>
+  <h1>Sign in required</h1>
+  <form id="login">
+    <label for="u">Email</label><input id="u" type="email">
+    <label for="p">Password</label><input id="p" type="password">
+    <button type="submit">Log in</button>
+  </form>
+  <p id="err" hidden>Invalid credentials - access denied.</p>
+  <script>login.onsubmit=(e)=>{e.preventDefault();err.hidden=false;};</script>
+</body></html>

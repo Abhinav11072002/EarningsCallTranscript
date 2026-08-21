@@ -30,6 +30,18 @@ async function describeField(el) {
       const rect = node.getBoundingClientRect();
       const candidates = Array.from(document.querySelectorAll('label, p, span, div, legend'))
         .filter((c) => !c.contains(node) && !node.contains(c));
+      const inputs = Array.from(document.querySelectorAll('input, select, textarea')).filter((i) => {
+        const r = i.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+
+      const gapTo = (target, labelRect) => {
+        const r = target.getBoundingClientRect();
+        const verticalGap = r.top - labelRect.bottom;
+        const horizontalOverlap = Math.min(r.right, labelRect.right) - Math.max(r.left, labelRect.left);
+        if (verticalGap < -5 || verticalGap > 60 || horizontalOverlap <= -50) return Infinity;
+        return verticalGap;
+      };
 
       let best = null;
       let bestGap = Infinity;
@@ -39,13 +51,25 @@ async function describeField(el) {
         const r = c.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) continue;
 
-        const verticalGap = rect.top - r.bottom;
-        const horizontalOverlap = Math.min(rect.right, r.right) - Math.max(rect.left, r.left);
-        // Label sits above the field (small positive gap) and roughly over the same columns.
-        if (verticalGap >= -5 && verticalGap <= 60 && horizontalOverlap > -50 && verticalGap < bestGap) {
-          bestGap = verticalGap;
-          best = text;
+        const gap = gapTo(node, r);
+        if (gap === Infinity || gap >= bestGap) continue;
+
+        // Only accept a label if THIS field is the closest field to it. Without this check the
+        // association can shift by one whole field when a layout puts inputs and labels in an
+        // order the geometry does not expect - and a shifted association is worse than none,
+        // because it types the email into the surname box and submits that.
+        let ownedByAnother = false;
+        for (const other of inputs) {
+          if (other === node) continue;
+          if (gapTo(other, r) < gap) {
+            ownedByAnother = true;
+            break;
+          }
         }
+        if (ownedByAnother) continue;
+
+        bestGap = gap;
+        best = text;
       }
       return best;
     }),
@@ -96,9 +120,29 @@ const IRRELEVANT_FIELD_PATTERN = /newsletter|subscrib|search|promo|coupon|discou
 // Buttons that must never be clicked while hunting for a registration CTA.
 const IRRELEVANT_BUTTON_PATTERN = /subscrib|newsletter|search|cookie|privacy|settings|preferences/i;
 
+// Gates we have no way to satisfy - a passcode, PIN, attendee ID or conference code. None of
+// these match the identity patterns, so before this they read as "no gate at all".
+const UNFILLABLE_GATE_PATTERN =
+  /pass\s?code|passcode|access\s*(?:code|pin)|\bpin\b|confirmation\s*(?:number|code)|attendee\s*id|conference\s*id|event\s*code|entry\s*code|\bpassword\b/i;
+
 function isFurniture(handle) {
   return handle
     .evaluate((node, selector) => Boolean(node.closest(selector)), FURNITURE_SELECTOR)
+    .catch(() => false);
+}
+
+// Spam honeypots are positioned off-screen and expected to stay empty; filling one is a common
+// way to get a registration silently rejected. Playwright's :visible only requires a non-empty
+// box, so an element at left:-9999px still counts as visible - verified with a fixture whose
+// honeypot received the dummy email.
+function isOffscreen(handle) {
+  return handle
+    .evaluate((node) => {
+      const r = node.getBoundingClientRect();
+      const w = window.innerWidth || document.documentElement.clientWidth;
+      const h = window.innerHeight || document.documentElement.clientHeight;
+      return r.right < 0 || r.bottom < 0 || r.left > w || r.top > h;
+    })
     .catch(() => false);
 }
 
@@ -109,7 +153,7 @@ const REGISTRATION_BUTTON_PATTERN = /register|registration|sign\s*in|log\s*in|ac
 // matching IRRELEVANT_FIELD_PATTERN (or a search box) is dropped entirely; anything inside site
 // chrome is demoted to a fallback rather than dropped, so a gate that genuinely lives in a
 // footer still works while a footer newsletter never gets touched.
-async function collectFillableFields(frame, identity) {
+async function collectFillableFields(frame, identity, allowFurnitureFallback) {
   const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
   const primary = [];
   const fallback = [];
@@ -117,6 +161,10 @@ async function collectFillableFields(frame, identity) {
     const tag = await el.evaluate((n) => n.tagName.toLowerCase());
     const type = ((await el.getAttribute('type')) || 'text').toLowerCase();
     if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'search'].includes(type)) continue;
+
+    if (await el.isDisabled().catch(() => false)) continue;
+    if (await el.isEditable().catch(() => true) === false) continue; // readonly
+    if (await isOffscreen(el)) continue;
 
     const description = await describeField(el);
     if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
@@ -127,7 +175,29 @@ async function collectFillableFields(frame, identity) {
     if (await isFurniture(el)) fallback.push(entry);
     else primary.push(entry);
   }
-  return primary.length ? primary : fallback;
+  if (primary.length) return primary;
+  if (!allowFurnitureFallback) return [];
+  // The furniture fallback exists for a gate that genuinely lives in a footer. But when the page
+  // offers a real registration BUTTON outside the chrome, this is a button-only gate (the Q4
+  // pattern: nothing to type) and the only "identity" field around is almost certainly a
+  // newsletter box - filling it subscribes the dummy identity and widens the set of buttons the
+  // click step will accept.
+  if (fallback.length && (await hasNonFurnitureRegistrationButton(frame))) return [];
+  return fallback;
+}
+
+async function hasNonFurnitureRegistrationButton(frame) {
+  const buttons = await frame
+    .$$('button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible')
+    .catch(() => []);
+  for (const btn of buttons) {
+    const text = ((await btn.innerText().catch(() => '')) || (await btn.getAttribute('value').catch(() => '')) || '').trim();
+    if (!text || !REGISTRATION_BUTTON_PATTERN.test(text)) continue;
+    if (IRRELEVANT_BUTTON_PATTERN.test(text)) continue;
+    if (await isFurniture(btn)) continue;
+    return true;
+  }
+  return false;
 }
 
 async function fillVisibleFields(frame, identity, logger) {
@@ -229,7 +299,11 @@ async function hasPendingRegistration(page) {
       if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'search'].includes(type)) continue;
       const description = await describeField(field);
       if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
-      if (!matchField(description)) continue;
+      // A gate we cannot fill is still a gate. A passcode/PIN/attendee-ID field matches none of
+      // the identity patterns, so such a page used to report "no gate" and get recorded - a
+      // transcript of the passcode form. Counting it as pending makes that a loud failure.
+      const unfillableGate = type === 'password' || UNFILLABLE_GATE_PATTERN.test(description);
+      if (!unfillableGate && !matchField(description)) continue;
       if (await isFurniture(field)) continue;
       return true;
     }
@@ -241,6 +315,27 @@ async function hasPendingRegistration(page) {
       if (await isFurniture(button)) continue;
       return true;
     }
+  }
+  return false;
+}
+
+// Some providers show a confirmation message but leave the (now-filled) form on screen instead
+// of replacing it. The pending check would then still see identity fields and report a gate,
+// failing a call that actually registered fine. An explicit success acknowledgement outranks
+// that inference.
+const REGISTRATION_SUCCESS_PATTERN =
+  /registration (complete|completed|successful|confirmed)|thank you for registering|you (are|have been) registered|registered for (the )?(conference|event|webcast)|successfully registered/i;
+
+async function hasRegistrationSuccess(page) {
+  for (const frame of page.frames()) {
+    const found = await frame
+      .evaluate((source) => {
+        const re = new RegExp(source, 'i');
+        const text = document.body ? document.body.innerText || '' : '';
+        return re.test(text);
+      }, REGISTRATION_SUCCESS_PATTERN.source)
+      .catch(() => false);
+    if (found) return true;
   }
   return false;
 }
@@ -278,7 +373,11 @@ async function fillRegistrationForm(page, identity, logger) {
       const buttons = await frame.$$('button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible').catch(() => []);
       if (!fields.length && !buttons.length) continue;
       foundAny = true;
-      const filledCount = await fillVisibleFields(frame, identity, logger);
+      // The furniture fallback is only for a first-pass gate that genuinely lives in site
+      // chrome. Once we have acted, a remaining chrome-only field is page furniture (a footer
+      // newsletter) that happens to look identity-shaped - filling it subscribes the dummy
+      // identity and widens the set of buttons the click step will then accept.
+      const filledCount = await fillVisibleFields(frame, identity, logger, step === 0 && !lastAction);
       await checkRequiredConsent(frame, logger);
       const clicked = await clickFirstMatchingButton(frame, logger, filledCount > 0, filledCount === 0);
       if (filledCount || clicked) acted = true;
@@ -289,11 +388,17 @@ async function fillRegistrationForm(page, identity, logger) {
     await page.waitForTimeout(800);
   }
   if (!foundAny) logger.info('No visible form fields or registration button found (probably no registration gate).');
-  const pending = foundAny && await hasPendingRegistration(page);
-  const error = pending ? await findRegistrationError(page) : null;
+  // An error message outranks a success message (some pages show both, e.g. "registered" plus
+  // "this email is not accepted"), so the error is checked first and wins.
+  const error = await findRegistrationError(page);
+  let pending = foundAny && (await hasPendingRegistration(page));
+  if (pending && !error && (await hasRegistrationSuccess(page))) {
+    logger.info('Registration acknowledged by the page; treating the gate as cleared.');
+    pending = false;
+  }
   if (error) logger.warn(`Registration page reports an error: ${error}`);
   if (lastAction && pending) logger.warn('Registration may still be incomplete after the available steps.');
-  return { foundAny, pending, error };
+  return { foundAny, pending, error: pending ? error : null };
 }
 
 module.exports = { fillRegistrationForm, matchField };

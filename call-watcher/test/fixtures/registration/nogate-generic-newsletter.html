@@ -1,0 +1,20 @@
+<!doctype html>
+<!-- Same "already joinable" case as nogate-player-with-newsletter, but with ORDINARY markup:
+     the input is plainly name="email" with a label "Email", and only the surrounding <h3> hints
+     that it is a newsletter. The earlier fixture only passed because the field happened to be
+     named "newsletter_email", which made the test tautological. Nothing here should be filled,
+     because the page also offers a real registration button outside the chrome. -->
+<html><body>
+  <h1>Q2 2026 Earnings Call</h1>
+  <p>Already registered? Join below.</p>
+  <button id="reg" type="button">Register for event</button>
+  <p id="ok" hidden>You are registered for the event.</p>
+  <video controls width="320" src="data:video/mp4;base64,AAAA"></video>
+  <footer>
+    <h3>Newsletter</h3>
+    <label for="e">Email</label>
+    <input id="e" name="email" type="email" data-expect="none">
+    <button type="submit">Sign up</button>
+  </footer>
+  <script>document.getElementById('reg').onclick=()=>{document.getElementById('reg').hidden=true;document.getElementById('ok').hidden=false;};</script>
+</body></html>

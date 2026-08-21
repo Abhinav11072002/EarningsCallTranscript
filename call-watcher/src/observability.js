@@ -44,7 +44,7 @@ function createObservability(dataDir, logger) {
 
     // Called every poll. `health` carries what an external watchdog needs to judge liveness
     // without parsing logs: staleness of this file, plus whether the table is still readable.
-    heartbeat({ rowsSeen, withLinks, dueNow, queueDepth, openCallTabs, chromeConnected }) {
+    heartbeat({ rowsSeen, withLinks, dueNow, queueDepth, openCallTabs, streamReadFailures = 0, chromeConnected }) {
       counters.pollCount++;
       safeWrite(() => {
         fs.writeFileSync(
@@ -60,6 +60,7 @@ function createObservability(dataDir, logger) {
               dueNow,
               queueDepth,
               openCallTabs,
+              streamReadFailures,
               chromeConnected,
               // A watchdog should alert on any of these being true, not just on staleness:
               // they are the "running but blind" states that used to look like a quiet day.
@@ -70,6 +71,11 @@ function createObservability(dataDir, logger) {
                 // Tabs are closed when their call completes; a climbing count means completion
                 // is not being observed, which is how Chrome ends up out of memory over days.
                 tabLeak: openCallTabs > 12,
+                // A persistent failure to read the extension's stream list wedges every row
+                // that already has a record, while first attempts keep working - so nothing
+                // in the log looks wrong.
+                cannotReadStreams: streamReadFailures >= 3,
+                chromeDisconnected: chromeConnected === false,
               },
               totals: { ...counters },
             },

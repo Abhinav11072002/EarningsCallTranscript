@@ -6,7 +6,7 @@ const { extractRows, minutesUntilCall, rowKey } = require('./tableWatcher');
 const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
-const { triggerExtension, getActiveStreams, streamMatchesRow } = require('./extensionTrigger');
+const { triggerExtension, getActiveStreams, streamMatchesRow, splitFiscalPeriod } = require('./extensionTrigger');
 const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
 const { resolveLogPath, pruneOldLogFiles } = require('./logRotation');
 const { createObservability } = require('./observability');
@@ -107,11 +107,33 @@ function processRow(context, portalPage, row, key, store, logger, obs, callTabs,
       // own component state. Resolved first so the rest of the pipeline below is completely
       // unaffected either way - it only ever sees a normal, complete URL.
       let dialinLink = row.dialinLink;
-      if (dialinLink.endsWith('...')) {
+      // Matches a real ellipsis character too, and an ellipsis anywhere rather than only at the
+      // end. About 40% of links depend on this detector, so a frontend tweak from "..." to "…"
+      // would otherwise silently send us to a truncated URL - which, for a provider prefix like
+      // "https://edge.media-server.com/mmc/p/", still matches a known domain and gets recorded
+      // as if it were the call.
+      if (/(\.{3}|…)/.test(dialinLink)) {
+        const truncatedPrefix = dialinLink.replace(/(\.{3}|…).*$/, '');
         dialinLink = await resolveDialinLinkByClick(context, portalPage, row.symbol, logger);
+        // The click resolver finds the row by symbol text alone, so this guards against it
+        // having matched a different row for the same ticker: the full URL must extend the
+        // prefix the portal actually showed for THIS row.
+        if (truncatedPrefix.length > 12 && !dialinLink.startsWith(truncatedPrefix)) {
+          throw new Error(
+            `Click-resolved link does not extend the truncated prefix shown for this row ` +
+              `(expected it to start with "${truncatedPrefix}", got "${dialinLink}") - probably the wrong row`
+          );
+        }
       }
 
-      page = await resolveWebcastPage(context, dialinLink, config, logger);
+      // Hints let the resolver prefer THIS call's link when a page lists several quarters -
+      // an events index often lists the archived quarter first, and DOM order is not relevance.
+      const { year, period } = splitFiscalPeriod(row.fiscalPeriod);
+      page = await resolveWebcastPage(context, dialinLink, config, logger, {
+        symbol: row.symbol,
+        year,
+        period,
+      });
       resolvedUrl = page.url();
       const registration = await fillRegistrationForm(page, config.dummyIdentity, logger);
       if (registration.pending) {
@@ -219,6 +241,10 @@ async function main() {
   // an identical warning indefinitely.
   const warnedUnparseable = new Set();
   let pollRunning = false;
+  // A persistent failure here silently wedges every row that has a record (no retries, no
+  // reconciliation, no completion), while first attempts keep succeeding - so the log looks
+  // healthy. Surfaced in the heartbeat so a watchdog can see it.
+  let consecutiveStreamReadFailures = 0;
   const poll = async () => {
     if (pollRunning) {
       logger.warn('Skipping overlapping poll; previous poll is still running.');
@@ -332,6 +358,7 @@ async function main() {
       dueNow: dueRows.length,
       queueDepth: queuedPipelines,
       openCallTabs: callTabs.size(),
+      streamReadFailures: consecutiveStreamReadFailures,
       chromeConnected: browser.isConnected(),
     });
 
@@ -344,23 +371,44 @@ async function main() {
     // storage requires opening an extension page, and an opening tab destroys any live
     // extension popup (verified directly) - so doing this outside the lock used to kill the
     // popup of a pipeline that was mid-trigger, wedging that call.
+    // Reading the extension's storage needs an extension tab, and an opening tab destroys any
+    // live popup - so it must not happen while a pipeline is mid-trigger. Gating on an idle
+    // queue achieves that WITHOUT joining the queue: an earlier version awaited the pipeline
+    // lock here, which stalled polling and the heartbeat for the entire duration of every call
+    // (minutes), so newly-due rows were not even noticed and a watchdog could not tell the
+    // process from a dead one. When a pipeline is in flight, reconciliation simply waits for
+    // the next poll; rows with no record are unaffected and still dispatch immediately.
     let streams = null;
-    if (dueRows.some((d) => d.record)) {
+    if (queuedPipelines === 0 && dueRows.some((d) => d.record)) {
       try {
-        streams = await withPipelineLock(() => getActiveStreams(context, config));
+        streams = await getActiveStreams(context, config);
+        consecutiveStreamReadFailures = 0;
       } catch (err) {
-        logger.warn(`Could not read active transcriptions: ${err.message}`);
+        consecutiveStreamReadFailures++;
+        logger.warn(
+          `Could not read active transcriptions (${consecutiveStreamReadFailures} in a row): ${err.message}`
+        );
       }
     }
 
     // Pass 2: reconcile against what the extension is actually recording, then dispatch.
     const reacquireGraceMinutes = Number(config.reacquireGraceMinutes ?? 30);
-    for (const { row, key, record, minsLeft } of dueRows) {
+    const dispatchedThisPoll = new Set();
+    for (const { row, key, minsLeft } of dueRows) {
+      // Re-read rather than trusting the pass-1 snapshot: the table can yield the same logical
+      // row twice (the geometry scrape buckets by position, so a cell and its wrapper can both
+      // survive), and a stale snapshot made the second copy claim and dispatch the SAME call a
+      // second time - two tabs, two triggers, and the first recording killed when the second
+      // tab registered under the same key.
+      if (dispatchedThisPoll.has(key)) continue;
+      const record = store.get(key);
       if (record) {
         if (record.status === 'completed') continue; // terminal: this call already ran and ended
         if (streams === null) continue; // cannot verify; try again next poll rather than guess
         if (streamMatchesRow(streams, row)) {
-          if (record.status !== 'started') store.markStarted(key);
+          // Seeing it again clears any absence tally, so a transient blip cannot accumulate
+          // across unrelated polls and eventually be mistaken for the call having ended.
+          if (record.status !== 'started' || record.absentObservations) store.markStarted(key);
           continue;
         }
         if (record.status === 'started') {
@@ -373,13 +421,39 @@ async function main() {
           // Without the second case a finished call was re-recorded every poll for the rest of
           // the retry window, duplicating transcripts and leaking a tab per attempt.
           if (minsLeft > -reacquireGraceMinutes) {
-            store.remove(key);
+            // Deliberately NOT removing the record: claim() derives the next attempt number
+            // from the existing one, so removing first would pin attempts at 1 and make the
+            // cap below unreachable - the same defect that let the retry path run ~200 times.
+            if (record.attempts >= Number(config.maxAttempts ?? 4)) {
+              store.markCompleted(key, `gave up reacquiring after ${record.attempts} attempts`);
+              callTabs.closeFor(key, 'reacquire attempts exhausted');
+              logger.warn(
+                `Giving up on ${row.symbol} ${row.fiscalPeriod}: stream keeps disappearing after ` +
+                  `${record.attempts} attempts.`
+              );
+              continue;
+            }
             logger.info(
               `No active transcription for ${row.symbol} ${row.fiscalPeriod} and only ` +
-                `${Math.abs(minsLeft).toFixed(0)} min past start; reacquiring.`
+                `${Math.abs(minsLeft).toFixed(0)} min past start; reacquiring (attempt ${record.attempts + 1}).`
             );
           } else {
-            store.markCompleted(key, 'stream ended past the reacquire grace period');
+            // `completed` is terminal AND closes the tab, so a single false negative would
+            // destroy a capture that is still running - and the storage list this is based on
+            // is known to be unreliable (an extension reload or service-worker restart can
+            // clear it mid-call). Require the stream to be absent on consecutive polls before
+            // acting, so one bad reading cannot end a live recording.
+            const absences = (store.get(key)?.absentObservations || 0) + 1;
+            const needed = Number(config.absentObservationsBeforeComplete ?? 2);
+            if (absences < needed) {
+              store.noteAbsent(key, absences);
+              logger.info(
+                `${row.symbol} ${row.fiscalPeriod}: stream not listed (${absences}/${needed}); ` +
+                  'waiting for confirmation before treating the call as finished.'
+              );
+              continue;
+            }
+            store.markCompleted(key, `stream absent on ${absences} consecutive polls past the reacquire grace period`);
             callTabs.closeFor(key, 'call finished');
             logger.info(`${row.symbol} ${row.fiscalPeriod} finished (stream ended); marked complete.`);
             continue;
@@ -392,7 +466,14 @@ async function main() {
         // silently disabled maxAttempts and kept the backoff at its base delay forever.
       }
       store.claim(key); // claim immediately so the next poll does not double-process
-      processRow(context, portalPage, row, key, store, logger, obs, callTabs, minsLeft);
+      dispatchedThisPoll.add(key);
+      // The promise is intentionally not awaited, but it MUST have a rejection handler: a throw
+      // from inside processRow's own catch (e.g. writeFileSync on a state file locked by an
+      // antivirus scanner) otherwise produced no log line, no outcome record and no exit - the
+      // call simply vanished.
+      processRow(context, portalPage, row, key, store, logger, obs, callTabs, minsLeft).catch((err) => {
+        logger.error(`Pipeline for ${row.symbol} ${row.fiscalPeriod} failed outside its own handler: ${err && err.stack ? err.stack : err}`);
+      });
     }
     } catch (err) {
       // poll() runs from setInterval, so anything escaping here becomes an unhandled rejection

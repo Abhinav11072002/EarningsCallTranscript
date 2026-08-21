@@ -248,6 +248,75 @@ async function openCdpSession(webSocketDebuggerUrl, commandTimeoutMs) {
 // happened in practice, with six triggers firing on a page titled "Page Not Found".
 const BAD_TARGET_TITLE_PATTERN = /page not found|404|not found|access denied|forbidden|error occurred|are you a robot|just a moment/i;
 
+// Pages that are clearly a past recording rather than the live call. Recording one of these
+// produces a transcript of the WRONG quarter, filed under the right symbol - indistinguishable
+// from a correct capture unless it is caught here.
+const REPLAY_TITLE_PATTERN = /\breplay\b|\barchive[sd]?\b|on-?demand|\btranscript\b/i;
+
+// Checks the page we are about to record actually relates to THIS call before capture starts.
+//
+// This is the gap that made every resolution bug silent: the only prior checks were an
+// error-page title regex and, afterwards, reading back a stream label that we typed ourselves.
+// So an archived quarter, a provider's marketing homepage, a PDF viewer or another company's
+// call all confirmed as "started" and were logged Done. Because capture is auto-accepted there
+// is no human gate either.
+//
+// Deliberately permissive: it looks for the ticker root OR a quarter token anywhere in the
+// title/URL/visible text, and only refuses when it finds NOTHING relevant. A false refusal
+// costs one retry and a loud log line; a false accept costs the transcript.
+async function assertPageLooksRelevant(page, row, logger, config) {
+  const { year, period } = splitFiscalPeriod(row.fiscalPeriod);
+  const symbolRoot = String(row.symbol || '')
+    .split(/[.\-^]/)[0]
+    .toLowerCase();
+
+  const probe = await page
+    .evaluate(() => ({
+      title: document.title || '',
+      url: location.href,
+      text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 4000),
+      hasMedia: Boolean(document.querySelector('video, audio, [class*=player], [id*=player], iframe')),
+    }))
+    .catch(() => null);
+  if (!probe) return; // cannot inspect; the other guards still apply
+
+  const haystack = `${probe.title} ${probe.url} ${probe.text}`.toLowerCase();
+  const symbolMatch = Boolean(symbolRoot && symbolRoot.length >= 2 && haystack.includes(symbolRoot));
+  const yearMatch = Boolean(year && haystack.includes(String(year)));
+  const periodMatch = Boolean(period && haystack.includes(String(period).toLowerCase()));
+
+  if (REPLAY_TITLE_PATTERN.test(probe.title)) {
+    throw new Error(`Refusing to record: page looks like a replay/archive, not the live call ("${probe.title}")`);
+  }
+
+  // The year ALONE is far too weak - almost any page mentions the current year (the admin portal
+  // itself does, which is how an earlier, looser version of this check passed on a page that had
+  // nothing to do with the call). Accept only a genuine identifier: the ticker, or the quarter
+  // AND year together, or a player element accompanied by one of them.
+  const accepted = symbolMatch
+    ? `symbol "${symbolRoot}"`
+    : yearMatch && periodMatch
+      ? `${period} ${year}`
+      : probe.hasMedia && (yearMatch || periodMatch)
+        ? `a player element plus ${periodMatch ? period : year}`
+        : null;
+
+  if (!accepted) {
+    const message =
+      `page does not identifiably belong to ${row.symbol} ${row.fiscalPeriod} ` +
+      `(title "${probe.title}", url ${probe.url}) - resolution probably landed on the wrong page`;
+    // Escapable without a code change: if a legitimate minimal player page (one that names
+    // neither the company nor the quarter) ever trips this, set requirePageRelevance=false in
+    // config.local.json to downgrade it to a warning rather than editing the check out.
+    if (config && config.requirePageRelevance === false) {
+      logger.warn(`Relevance check would have refused this page, but is disabled: ${message}`);
+      return;
+    }
+    throw new Error(`Refusing to record: ${message}`);
+  }
+  logger.info(`Target page relevance check passed on ${accepted}.`);
+}
+
 // Brings the call tab to front, triggers the popup via the global shortcut, then finds and
 // drives it via raw CDP (Symbol/Year/Period + Start Transcription).
 async function triggerExtension(context, targetPage, row, config, logger) {
@@ -260,6 +329,7 @@ async function triggerExtension(context, targetPage, row, config, logger) {
   if (BAD_TARGET_TITLE_PATTERN.test(titleHint)) {
     throw new Error(`Refusing to record: resolved page looks like an error/unrelated page ("${titleHint}")`);
   }
+  await assertPageLooksRelevant(targetPage, row, logger, config);
 
   await sendGlobalShortcut(config.extensionShortcutSendKeys, config, titleHint, logger);
 

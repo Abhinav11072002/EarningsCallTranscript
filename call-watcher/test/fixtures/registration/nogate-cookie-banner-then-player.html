@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- A cookie wall covers an already-joinable player. Nothing to register for; the banner must
+     be dismissed (or at least not mistaken for a gate) and no input should be filled. -->
+<html><body>
+  <div id="onetrust-banner-sdk" style="position:fixed;top:0;left:0;width:100%;height:120px;background:#eee">
+    <p>We use cookies.</p>
+    <button id="onetrust-accept-btn-handler" type="button">Accept All Cookies</button>
+  </div>
+  <h1>Q2 2026 Earnings Call</h1>
+  <video controls width="320" src="data:video/mp4;base64,AAAA"></video>
+  <footer>
+    <label for="nl">Email</label><input id="nl" name="newsletter" data-expect="none">
+    <button type="submit">Subscribe</button>
+  </footer>
+  <script>
+    onetrust-accept-btn-handler;
+    document.getElementById('onetrust-accept-btn-handler').onclick=()=>{
+      document.getElementById('onetrust-banner-sdk').remove();
+    };
+  </script>
+</body></html>

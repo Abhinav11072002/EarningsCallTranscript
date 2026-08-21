@@ -70,9 +70,16 @@ async function resolveDialinLinkByClick(context, portalPage, symbol, logger) {
     }
   }
 
-  await newPage.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+  // Playwright fires 'page' at creation, and waitForLoadState resolves immediately for the
+  // initial empty document - so without waiting for a real http(s) URL this could return
+  // "about:blank", which then resolves to nothing and records a blank tab as a success.
+  await newPage.waitForURL(/^https?:/i, { timeout: 15000 }).catch(() => {});
   const resolvedUrl = newPage.url();
   await newPage.close().catch(() => {});
+
+  if (!/^https?:\/\//i.test(resolvedUrl)) {
+    throw new Error(`Clicking the dial-in cell for ${symbol} produced no usable URL (got "${resolvedUrl}")`);
+  }
 
   logger.info(`Resolved truncated link for ${symbol} by clicking it live: ${resolvedUrl}`);
   return resolvedUrl;

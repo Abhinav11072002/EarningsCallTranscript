@@ -41,6 +41,36 @@ async function fixtureSucceeded(page) {
   return false;
 }
 
+// Self-describing fixtures: a field annotated `data-expect="email"` must end up holding
+// identity.email, and `data-expect="none"` must stay empty (honeypots, unrelated inputs).
+// This lets a new fixture be dropped in without editing this file - the older fixtures below
+// predate the convention and keep their hardcoded expectations.
+async function annotatedFieldsFilled(page) {
+  const problems = [];
+  let annotated = 0;
+  for (const frame of page.frames()) {
+    const fields = await frame.$$('[data-expect]').catch(() => []);
+    for (const field of fields) {
+      annotated++;
+      const key = await field.getAttribute('data-expect');
+      const value = (await field.inputValue().catch(() => '')) || '';
+      if (key === 'none') {
+        if (value.trim()) problems.push(`${key}: expected empty, got ${JSON.stringify(value)}`);
+        continue;
+      }
+      const want = identity[key];
+      if (want === undefined) {
+        problems.push(`data-expect="${key}" is not a key of dummyIdentity`);
+        continue;
+      }
+      if (value.trim().toLowerCase() !== String(want).trim().toLowerCase()) {
+        problems.push(`${key}: expected ${JSON.stringify(want)}, got ${JSON.stringify(value)}`);
+      }
+    }
+  }
+  return { annotated, problems };
+}
+
 async function allExpectedFieldsFilled(page, fixture) {
   const expected = fixture === 'choruscall.html'
     ? { full: identity.fullName, mail: identity.email, phone: identity.phone, org: identity.company }
@@ -72,16 +102,27 @@ async function allExpectedFieldsFilled(page, fixture) {
       await page.setContent(fs.readFileSync(path.join(fixtureDir, fixture), 'utf8'));
       const result = await fillRegistrationForm(page, identity, logger);
       const success = await fixtureSucceeded(page);
-      const fieldsFilled = await allExpectedFieldsFilled(page, fixture);
+      const annotated = await annotatedFieldsFilled(page);
+      // Annotated fixtures are checked by their annotations; older ones by the hardcoded map.
+      const fieldsFilled = annotated.annotated > 0
+        ? annotated.problems.length === 0
+        : await allExpectedFieldsFilled(page, fixture);
       const passed = !result.pending && success && fieldsFilled;
       console.log(`${passed ? 'PASS' : 'FAIL'} ${fixture}: pending=${result.pending} success=${success} fields=${fieldsFilled}`);
+      for (const problem of annotated.problems) console.log(`       ${problem}`);
       if (!passed) failures.push(fixture);
     }
-    await page.setContent(fs.readFileSync(path.join(fixtureDir, 'rejected.html'), 'utf8'));
-    const rejected = await fillRegistrationForm(page, identity, logger);
-    const rejectedPassed = rejected.pending && rejected.error && await page.getByText(/not accepted/).count();
-    console.log(`${rejectedPassed ? 'PASS' : 'FAIL'} rejected.html: pending=${rejected.pending} error=${Boolean(rejected.error)}`);
-    if (!rejectedPassed) failures.push('rejected.html');
+    // Negative fixtures: a gate we cannot get through. The point is that it fails LOUDLY -
+    // reporting pending so the call is retried/logged, rather than proceeding to record a
+    // rejection notice or a login page as if the call had been joined.
+    const negativeFixtures = allFixtures.filter((name) => name.startsWith(NEGATIVE_FIXTURE_PREFIX));
+    for (const fixture of negativeFixtures) {
+      await page.setContent(fs.readFileSync(path.join(fixtureDir, fixture), 'utf8'));
+      const rejected = await fillRegistrationForm(page, identity, logger);
+      const passed = Boolean(rejected.pending);
+      console.log(`${passed ? 'PASS' : 'FAIL'} ${fixture}: pending=${rejected.pending} error=${Boolean(rejected.error)}`);
+      if (!passed) failures.push(fixture);
+    }
 
     // No-gate fixtures: the call is already joinable. Reporting pending here would fail a
     // perfectly good call, and filling an unrelated input can trigger navigation or an
