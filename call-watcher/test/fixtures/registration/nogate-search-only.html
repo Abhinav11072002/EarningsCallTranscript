@@ -1,0 +1,24 @@
+<!doctype html>
+<!--
+  ADVERSARIAL "no gate" fixture: a plain webcast landing page whose only input is a site search
+  box, plus a "Log in" link. Nothing here should be filled and nothing is pending.
+
+  Correct behaviour: pending === false, and the search box is NOT filled with the dummy
+  identity (typing into an unrelated box can trigger navigation or an autocomplete overlay that
+  covers the player).
+-->
+<html>
+  <head><title>Investor Events - Acme Corp</title></head>
+  <body>
+    <nav>
+      <input type="search" name="q" placeholder="Search this site" aria-label="Search" />
+      <a role="button" href="#">Log in</a>
+    </nav>
+
+    <main>
+      <h1>Acme Corp Q2 2026 Results</h1>
+      <p>Audio webcast in progress.</p>
+      <audio controls src="data:audio/mp3;base64,AAAA"></audio>
+    </main>
+  </body>
+</html>

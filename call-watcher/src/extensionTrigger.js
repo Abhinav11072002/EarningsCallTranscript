@@ -38,8 +38,16 @@ function sendGlobalShortcut(sendKeysSequence, config, titleHint, logger) {
       const out = (stdout || '').trim().split(/\r?\n/).filter(Boolean).join(' | ');
       if (out) logger.info(`send-shortcut.ps1: ${out}`);
       if (err) {
-        const reason = err.killed ? `timed out after ${timeout}ms` : err.message;
-        reject(new Error(`Focus/keystroke injection failed (${reason}) ${(stderr || '').trim()}`.trim()));
+        // PowerShell error records are enormous (the message, then CategoryInfo and
+        // FullyQualifiedErrorId, often duplicated). Keep just the human sentence so the log
+        // line and the outcomes ledger stay readable.
+        const firstSentence = (stderr || '')
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .find((l) => l && !l.startsWith('+') && !/^(CategoryInfo|FullyQualifiedErrorId)/.test(l));
+        const detail = (firstSentence || '').replace(/^.*send-shortcut\.ps1\s*:\s*/, '').trim();
+        const reason = err.killed ? `timed out after ${timeout}ms` : detail || err.message;
+        reject(new Error(`Focus/keystroke injection failed: ${reason}`));
       } else resolve();
     });
   });

@@ -17,7 +17,7 @@ Chrome/Windows behaviour found by live testing, not by design. Where a comment o
 
 ## How the extension gets triggered (the tricky part)
 
-Opening the extension's popup and filling it turned out to need three non-obvious pieces,
+Opening the extension's popup and filling it turned out to need four non-obvious pieces,
 each found by testing against the real thing rather than assumed up front:
 
 1. **A real OS-level keypress, via `SendInput`, not `SendKeys`.** The extension's capture
@@ -29,14 +29,26 @@ each found by testing against the real thing rather than assumed up front:
    input, and Chrome's command layer doesn't treat that as a genuine keypress. `SendInput`
    (`scripts/send-shortcut.ps1`) injects synthetic input at the same level as real hardware,
    which Chrome's command shortcuts do respond to.
-2. **Finding the right OS window isn't just "Chrome's main window."** A `chrome.exe` process
+2. **Taking the foreground is the least reliable step, and needed real work.** Measured with a
+   dedicated harness (`node scripts/test-popup-reliability.js 30`, which opens and fills the
+   popup 30 times without starting recordings): the first version scored **0/30** whenever any
+   non-Chrome window held the foreground, because Windows silently refuses
+   `SetForegroundWindow` from a process that does not already own it - it just returns false.
+   An earlier 11/12 reading was misleading: it only passed because Chrome happened to be the
+   active window already. Two changes took it to **30/30** (median 1.3s): a benign ALT tap
+   before each attempt (Windows treats a process that just received keyboard input as eligible
+   to set the foreground), and a retry loop, since focus can be stolen back in the moment after
+   a successful call. The script now also exits non-zero rather than injecting keystrokes it
+   knows will land on the wrong window.
+
+3. **Finding the right OS window isn't just "Chrome's main window."** A `chrome.exe` process
    can own more than one top-level window (e.g. a webcast link that opens its player in a
    separate popup window, not just a new tab) - `Process.MainWindowHandle` only ever reports
    one of them, ambiguously. `send-shortcut.ps1` enumerates every visible top-level window
    across every `chrome.exe` process matching `--remote-debugging-port`, and picks the one
    whose title matches the actual target tab (passed in from `extensionTrigger.js` via
    `targetPage.title()`), falling back to `MainWindowHandle` if no title matches.
-3. **Playwright never sees the popup as a page.** Confirmed directly with
+4. **Playwright never sees the popup as a page.** Confirmed directly with
    `scripts/diagnose-popup.js`: the popup opens visibly and is listed by Chrome's own
    `/json/list` HTTP endpoint, but `context.pages()` / the `'page'` event never see it -
    Playwright's auto-attach doesn't reach it, most likely because it isn't spawned as a child
@@ -81,6 +93,34 @@ Playwright's `element.click()` is required rather than a JS-triggered `el.click(
 seen with the extension's `getDisplayMedia()` call. The resolved URL is fed into the normal
 `resolveWebcastPage()` pipeline exactly as if it had been a normal, untruncated link all along -
 `index.js` only reaches for this when a row's `dialinLink` ends in `"..."`.
+
+## Running indefinitely
+
+Three things had to change for `npm start` to be left running for weeks rather than an
+afternoon. Each was a real leak, not a theoretical one.
+
+**Call tabs are closed when their call ends.** The pipeline deliberately does not close a tab on
+success - the capture lives in it. But nothing closed them afterwards either, so every call left
+a tab holding a `MediaRecorder` and a websocket. `callTabs.js` closes a tab once its call is
+marked complete, with a hard `maxCallTabMinutes` backstop for calls whose ending was never
+observed (e.g. the extension was reloaded and its storage cleared). `heartbeat.json` exposes
+`openCallTabs` and a `tabLeak` warning so growth is visible before it becomes a crash.
+
+**A finished call is no longer re-recorded.** "Was started, and its stream is no longer active"
+is ambiguous: either it was stopped by hand mid-call (reacquire it) or the call simply ended
+(the extension also auto-stops after 10 minutes of silence). With no terminal state, the second
+case looked like the first, so a completed call was re-recorded on every poll for the rest of
+`retryWindowMinutes` - duplicate transcripts and a new tab each time. Now a vanished stream is
+reacquired only within `reacquireGraceMinutes` of the scheduled start; past that the call is
+marked `completed`, which is terminal.
+
+**Unbounded growth is bounded.** Dedupe records are pruned past `stateRecordTtlDays`; the
+unparseable-row warning set is cleared if it grows large (it is keyed partly on the live
+countdown text, so a row whose text ticks would otherwise add an entry every poll); logs are
+per-day files with `logRetentionDays` retention.
+
+Still manual, and worth knowing: the machine must stay unlocked (see the focus note below), and
+nothing supervises the process itself - point a scheduled task at `heartbeat.json` for that.
 
 ## Serialization
 
@@ -245,6 +285,13 @@ stop: crash, wedged poll, lost Chrome, or expired portal session.
   any unbounded wait there stalls not just its own call but every later one for the rest of the
   day. One such hang was verified: the popup closes the instant its tab loses focus, and an
   in-flight CDP command with no close handler never settles.
+- `reacquireGraceMinutes` — how long after the scheduled start a vanished stream is treated as
+  "stopped by accident, reacquire it" rather than "the call ended" (30). Past this the call is
+  marked `completed`, which is terminal - see "Running indefinitely".
+- `maxCallTabMinutes` — backstop age at which a call tab is closed even if completion was
+  never observed (180).
+- `stateRecordTtlDays` — how long dedupe records are kept (7). They can never be replayed once
+  their date passes, but they used to accumulate forever.
 - `logRetentionDays` — how many daily log files to keep (14). The outcomes ledger is never pruned.
 - `popupTimeoutMs` — how long to wait for the popup to appear via CDP after sending the
   shortcut (the stream-item confirmation step afterward has its own `streamConfirmTimeoutMs`

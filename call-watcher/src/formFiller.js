@@ -80,21 +80,60 @@ function matchField(description) {
   return best ? best.key : null;
 }
 
+// Site chrome, not the registration gate. Verified against adversarial fixtures: a webcast page
+// that is ALREADY joinable commonly carries a header "Sign In"/"Account" button and a footer
+// newsletter email box. Counting those as a gate made the pipeline throw "Registration gate
+// still appears active" and fail a call that was completely fine - and the newsletter box got
+// the dummy email typed into it. Clicking a header "Sign In" is worse still: it navigates away
+// from the player entirely.
+const FURNITURE_SELECTOR = 'nav, header, footer, [role=navigation], [role=search], [role=banner], [role=contentinfo]';
+
+// Inputs that look identity-ish but never belong to a gate. Excluded everywhere, regardless of
+// position, because typing into them can trigger navigation or an autocomplete overlay that
+// covers the player - and subscribing the dummy identity to a mailing list is a real side effect.
+const IRRELEVANT_FIELD_PATTERN = /newsletter|subscrib|search|promo|coupon|discount|voucher/i;
+
+// Buttons that must never be clicked while hunting for a registration CTA.
+const IRRELEVANT_BUTTON_PATTERN = /subscrib|newsletter|search|cookie|privacy|settings|preferences/i;
+
+function isFurniture(handle) {
+  return handle
+    .evaluate((node, selector) => Boolean(node.closest(selector)), FURNITURE_SELECTOR)
+    .catch(() => false);
+}
+
 const CTA_BUTTON_PATTERN = /register|submit|enter|join|continue|watch now|listen now|access|attend/i;
 const REGISTRATION_BUTTON_PATTERN = /register|registration|sign\s*in|log\s*in|account|continue\s+registration|continue\s+without|guest|join\s+(the\s+)?(webinar|conference|event)|attend\s+(the\s+)?event/i;
 
-async function fillVisibleFields(frame, identity, logger) {
+// Fields worth filling, split by how confident we are that they belong to the gate. Anything
+// matching IRRELEVANT_FIELD_PATTERN (or a search box) is dropped entirely; anything inside site
+// chrome is demoted to a fallback rather than dropped, so a gate that genuinely lives in a
+// footer still works while a footer newsletter never gets touched.
+async function collectFillableFields(frame, identity) {
   const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
-  let filledCount = 0;
+  const primary = [];
+  const fallback = [];
   for (const el of fields) {
     const tag = await el.evaluate((n) => n.tagName.toLowerCase());
-    const type = (await el.getAttribute('type')) || 'text';
-    if (['hidden', 'submit', 'button', 'checkbox', 'radio'].includes(type)) continue;
+    const type = ((await el.getAttribute('type')) || 'text').toLowerCase();
+    if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'search'].includes(type)) continue;
 
     const description = await describeField(el);
+    if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
     const key = matchField(description);
     if (!key || identity[key] === undefined) continue;
 
+    const entry = { el, tag, description, key };
+    if (await isFurniture(el)) fallback.push(entry);
+    else primary.push(entry);
+  }
+  return primary.length ? primary : fallback;
+}
+
+async function fillVisibleFields(frame, identity, logger) {
+  const targets = await collectFillableFields(frame, identity);
+  let filledCount = 0;
+  for (const { el, tag, description, key } of targets) {
     try {
       if (tag === 'select') {
         await el.selectOption({ label: identity[key] }).catch(() => el.selectOption(identity[key]).catch(() => {}));
@@ -152,6 +191,11 @@ async function clickFirstMatchingButton(frame, logger, allowSubmitFallback = fal
   for (const btn of buttons) {
     const text = ((await btn.innerText().catch(() => '')) || (await btn.getAttribute('value').catch(() => '')) || '').trim();
     const type = ((await btn.getAttribute('type').catch(() => '')) || '').toLowerCase();
+    // Never click site chrome or an unrelated CTA. A header "Sign In" matches the registration
+    // pattern and would navigate away from the player; a footer "Subscribe" would submit a
+    // newsletter form instead of the gate.
+    if (IRRELEVANT_BUTTON_PATTERN.test(text)) continue;
+    if (await isFurniture(btn)) continue;
     const score = /continue\s+without|guest/i.test(text) ? 6 : /register|registration/i.test(text) ? 5 : /submit|continue|join|enter|watch now|listen now|access|attend/i.test(text) ? 4 : type === 'submit' ? 2 : 0;
     if (!score || (registrationOnly && !REGISTRATION_BUTTON_PATTERN.test(text))) continue;
     if (!CTA_BUTTON_PATTERN.test(text) && !(allowSubmitFallback && type === 'submit')) continue;
@@ -173,19 +217,29 @@ async function clickFirstMatchingButton(frame, logger, allowSubmitFallback = fal
   return false;
 }
 
+// "Is a gate still blocking us?" - the answer gates the whole call, so it must only count
+// evidence that plausibly belongs to a registration form. Site chrome and unrelated inputs are
+// excluded for the reasons documented on FURNITURE_SELECTOR: counting them reported a gate on
+// pages that were already joinable, which failed the call outright.
 async function hasPendingRegistration(page) {
   for (const frame of page.frames()) {
     const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
     for (const field of fields) {
       const type = ((await field.getAttribute('type').catch(() => '')) || 'text').toLowerCase();
-      if (!['hidden', 'submit', 'button', 'checkbox', 'radio'].includes(type) && matchField(await describeField(field))) {
-        return true;
-      }
+      if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'search'].includes(type)) continue;
+      const description = await describeField(field);
+      if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
+      if (!matchField(description)) continue;
+      if (await isFurniture(field)) continue;
+      return true;
     }
     const buttons = await frame.$$('button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible').catch(() => []);
     for (const button of buttons) {
       const text = ((await button.innerText().catch(() => '')) || (await button.getAttribute('value').catch(() => '')) || '').trim();
-      if (REGISTRATION_BUTTON_PATTERN.test(text)) return true;
+      if (!REGISTRATION_BUTTON_PATTERN.test(text)) continue;
+      if (IRRELEVANT_BUTTON_PATTERN.test(text)) continue;
+      if (await isFurniture(button)) continue;
+      return true;
     }
   }
   return false;

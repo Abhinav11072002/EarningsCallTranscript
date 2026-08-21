@@ -171,7 +171,11 @@ check('StateStore: legacy array format migrates to started records', () => {
   const file = path.join(dir, 'processed.json');
   fs.writeFileSync(file, JSON.stringify(['ACME|2026Q2|2026-08-19']));
   const store = new StateStore(file);
-  assert.deepStrictEqual(store.get('ACME|2026Q2|2026-08-19'), { status: 'started', attempts: 1 });
+  const migrated = store.get('ACME|2026Q2|2026-08-19');
+  assert.strictEqual(migrated.status, 'started');
+  assert.strictEqual(migrated.attempts, 1);
+  // Stamped on migration so the TTL sweep ages it out instead of deleting it immediately.
+  assert.ok(migrated.updatedAt && !Number.isNaN(Date.parse(migrated.updatedAt)));
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -182,6 +186,88 @@ check('StateStore: survives a corrupt state file rather than throwing', () => {
   const store = new StateStore(file);
   assert.strictEqual(store.get('anything'), null);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- terminal completion + TTL
+
+check('StateStore: completed is terminal and distinguishable from failed', () => {
+  const dir = tmpDir('cw-done-');
+  const store = new StateStore(path.join(dir, 'processed.json'));
+  const key = 'K';
+  store.claim(key);
+  store.markStarted(key);
+  store.markCompleted(key, 'stream ended past the reacquire grace period');
+  const rec = store.get(key);
+  assert.strictEqual(rec.status, 'completed');
+  assert.ok(rec.completedReason);
+  // Terminal means the poll loop skips it outright, so it must never look retry-due.
+  assert.strictEqual(store.retryDue(key), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('StateStore: expired records are pruned, fresh ones kept', () => {
+  const dir = tmpDir('cw-ttl-');
+  const file = path.join(dir, 'processed.json');
+  const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const recent = new Date().toISOString();
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      'OLD|2026Q1|2026-01-01': { status: 'completed', attempts: 1, updatedAt: old },
+      'NEW|2026Q2|2026-08-21': { status: 'started', attempts: 1, updatedAt: recent },
+    })
+  );
+  const store = new StateStore(file, 7); // constructor prunes on load
+  assert.strictEqual(store.get('OLD|2026Q1|2026-01-01'), null, 'stale record should be gone');
+  assert.ok(store.get('NEW|2026Q2|2026-08-21'), 'recent record should survive');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- call tab lifecycle
+
+check('CallTabRegistry: closes finished calls and ages out the rest', () => {
+  const { CallTabRegistry } = require('../src/callTabs');
+  const closed = [];
+  const fakePage = (name) => ({
+    isClosed: () => false,
+    close: () => {
+      closed.push(name);
+      return Promise.resolve();
+    },
+  });
+  const reg = new CallTabRegistry({ info: () => {}, warn: () => {} });
+  reg.register('done', fakePage('done'), 'DONE 2026Q1');
+  reg.register('live', fakePage('live'), 'LIVE 2026Q1');
+  assert.strictEqual(reg.size(), 2);
+
+  // Only the completed one closes; a huge age cap means nothing ages out.
+  reg.sweep((k) => k === 'done', 60 * 60 * 1000);
+  assert.deepStrictEqual(closed, ['done']);
+  assert.strictEqual(reg.size(), 1);
+
+  // Age cap of 0 closes whatever is left, even though it is not "finished".
+  reg.sweep(() => false, -1);
+  assert.deepStrictEqual(closed.sort(), ['done', 'live']);
+  assert.strictEqual(reg.size(), 0);
+});
+
+check('CallTabRegistry: re-registering a key does not leak the previous tab', () => {
+  const { CallTabRegistry } = require('../src/callTabs');
+  const closed = [];
+  const fakePage = (name) => ({ isClosed: () => false, close: () => { closed.push(name); return Promise.resolve(); } });
+  const reg = new CallTabRegistry({ info: () => {}, warn: () => {} });
+  reg.register('k', fakePage('first'), 'X');
+  reg.register('k', fakePage('second'), 'X');
+  assert.deepStrictEqual(closed, ['first']);
+  assert.strictEqual(reg.size(), 1);
+});
+
+check('CallTabRegistry: drops tabs the user already closed', () => {
+  const { CallTabRegistry } = require('../src/callTabs');
+  const reg = new CallTabRegistry({ info: () => {}, warn: () => {} });
+  reg.register('gone', { isClosed: () => true, close: () => Promise.resolve() }, 'GONE');
+  reg.sweep(() => false, 60 * 60 * 1000);
+  assert.strictEqual(reg.size(), 0);
 });
 
 // ---------------------------------------------------------------- log retention

@@ -11,6 +11,7 @@ const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
 const { resolveLogPath, pruneOldLogFiles } = require('./logRotation');
 const { createObservability } = require('./observability');
 const { checkChromeLaunchFlags } = require('./preflight');
+const { CallTabRegistry } = require('./callTabs');
 
 const config = loadConfig();
 
@@ -91,7 +92,7 @@ function withPipelineLock(fn) {
 
 // Queued (not awaited) from the poll loop, so poll() keeps scanning for newly-due rows while
 // this one waits its turn; the dedupe store claims the row before this is called.
-function processRow(context, portalPage, row, key, store, logger, obs, minsLeftAtDispatch) {
+function processRow(context, portalPage, row, key, store, logger, obs, callTabs, minsLeftAtDispatch) {
   return withPipelineLock(async () => {
     const startedAt = Date.now();
     let page;
@@ -129,6 +130,9 @@ function processRow(context, portalPage, row, key, store, logger, obs, minsLeftA
       transcriptionStarted = true;
       pageTitle = await page.title().catch(() => null);
       store.markStarted(key);
+      // Hand the tab to the registry instead of closing it: the capture lives in this tab, so
+      // it must stay open until the call is over. The registry is what eventually closes it.
+      callTabs.register(key, page, `${row.symbol} ${row.fiscalPeriod}`);
       logger.info(`Done: ${row.symbol} ${row.fiscalPeriod} (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
       obs.recordOutcome({
         status: 'started',
@@ -168,8 +172,9 @@ function processRow(context, portalPage, row, key, store, logger, obs, minsLeftA
 
 async function main() {
   const logger = makeLogger();
-  const store = new StateStore(path.join(__dirname, '..', 'data', 'processed.json'));
+  const store = new StateStore(path.join(__dirname, '..', 'data', 'processed.json'), Number(config.stateRecordTtlDays ?? 7));
   const obs = createObservability(DATA_DIR, logger);
+  const callTabs = new CallTabRegistry(logger);
 
   let browser;
   let context;
@@ -312,11 +317,21 @@ async function main() {
       dueRows.push({ row, key, record, minsLeft });
     }
 
+    // Close tabs whose call is over. Without this every successful call leaves a tab holding a
+    // live capture for as long as the process runs - fine for an afternoon, fatal over days.
+    // `completed` is set by the reconciliation below; the age cap catches calls whose ending we
+    // never observed (e.g. the extension was reloaded and its storage cleared).
+    callTabs.sweep(
+      (k) => store.get(k)?.status === 'completed',
+      Number(config.maxCallTabMinutes ?? 180) * 60000
+    );
+
     obs.heartbeat({
       rowsSeen: rows.length,
       withLinks,
       dueNow: dueRows.length,
       queueDepth: queuedPipelines,
+      openCallTabs: callTabs.size(),
       chromeConnected: browser.isConnected(),
     });
 
@@ -339,19 +354,36 @@ async function main() {
     }
 
     // Pass 2: reconcile against what the extension is actually recording, then dispatch.
+    const reacquireGraceMinutes = Number(config.reacquireGraceMinutes ?? 30);
     for (const { row, key, record, minsLeft } of dueRows) {
       if (record) {
+        if (record.status === 'completed') continue; // terminal: this call already ran and ended
         if (streams === null) continue; // cannot verify; try again next poll rather than guess
         if (streamMatchesRow(streams, row)) {
           if (record.status !== 'started') store.markStarted(key);
           continue;
         }
         if (record.status === 'started') {
-          // It was recording and no longer is (stopped by hand, or the tab/extension died).
-          // Dropping the record deliberately restarts the attempt series for this fresh
-          // problem rather than counting it against the earlier successful start.
-          store.remove(key);
-          logger.info(`No active transcription found for ${row.symbol} ${row.fiscalPeriod}; allowing retry.`);
+          // It was recording and now is not. Two very different causes, and the difference
+          // decides whether re-recording is correct:
+          //   - soon after the scheduled start -> the call is probably still on and the stream
+          //     was stopped by hand or died, so reacquiring it is right
+          //   - well past the start -> the call is simply over (the extension also auto-stops
+          //     after 10 min of silence), so this is terminal
+          // Without the second case a finished call was re-recorded every poll for the rest of
+          // the retry window, duplicating transcripts and leaking a tab per attempt.
+          if (minsLeft > -reacquireGraceMinutes) {
+            store.remove(key);
+            logger.info(
+              `No active transcription for ${row.symbol} ${row.fiscalPeriod} and only ` +
+                `${Math.abs(minsLeft).toFixed(0)} min past start; reacquiring.`
+            );
+          } else {
+            store.markCompleted(key, 'stream ended past the reacquire grace period');
+            callTabs.closeFor(key, 'call finished');
+            logger.info(`${row.symbol} ${row.fiscalPeriod} finished (stream ended); marked complete.`);
+            continue;
+          }
         } else if (!store.retryDue(key) || record.attempts >= Number(config.maxAttempts ?? 4)) {
           continue;
         }
@@ -360,7 +392,7 @@ async function main() {
         // silently disabled maxAttempts and kept the backoff at its base delay forever.
       }
       store.claim(key); // claim immediately so the next poll does not double-process
-      processRow(context, portalPage, row, key, store, logger, obs, minsLeft);
+      processRow(context, portalPage, row, key, store, logger, obs, callTabs, minsLeft);
     }
     } catch (err) {
       // poll() runs from setInterval, so anything escaping here becomes an unhandled rejection
@@ -382,6 +414,20 @@ async function main() {
   };
   sweepLogs();
   setInterval(sweepLogs, LOG_PRUNE_INTERVAL_MS);
+
+  // Both of these are unbounded otherwise, which only matters for a process meant to run for
+  // weeks: dedupe records were never removed (the file and Map grew forever), and the
+  // warned-about set is keyed partly on the countdown text, so a row whose text ticks every
+  // poll adds a new entry each time.
+  const sweepState = () => {
+    const removed = store.pruneExpired();
+    if (removed) logger.info(`Pruned ${removed} dedupe record(s) past their TTL.`);
+    if (warnedUnparseable.size > 5000) {
+      warnedUnparseable.clear();
+      logger.info('Cleared the unparseable-row warning set after it grew large; a warning may repeat once.');
+    }
+  };
+  setInterval(sweepState, LOG_PRUNE_INTERVAL_MS);
 }
 
 // A crash used to leave nothing behind but a closed terminal: fatal errors went to the console

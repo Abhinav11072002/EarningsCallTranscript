@@ -1,0 +1,33 @@
+<!doctype html>
+<!--
+  ADVERSARIAL "no gate" fixture: the webcast is already playing - there is nothing to register
+  for. But the page carries furniture that looks like a registration gate to a naive check:
+  a header "Sign In" button and a footer newsletter email field.
+
+  Correct behaviour: pending === false (and ideally the newsletter box is left alone).
+  Getting this wrong fails a call that was actually fine, which is worse than a mis-fill: the
+  pipeline throws "Registration gate still appears active" and the recording never starts.
+-->
+<html>
+  <head><title>Q2 2026 Earnings Call - Live Webcast</title></head>
+  <body>
+    <header>
+      <span>Acme Investor Relations</span>
+      <button type="button">Sign In</button>
+      <button type="button">Account</button>
+    </header>
+
+    <main>
+      <h1>Q2 2026 Earnings Call</h1>
+      <p>The webcast is now live.</p>
+      <video controls width="480" src="data:video/mp4;base64,AAAA"></video>
+    </main>
+
+    <footer>
+      <h3>Newsletter</h3>
+      <label for="nl">Email Address</label>
+      <input id="nl" name="newsletter_email" type="email" placeholder="Email Address" />
+      <button type="submit">Subscribe</button>
+    </footer>
+  </body>
+</html>

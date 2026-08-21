@@ -1,9 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 
+const DEFAULT_RECORD_TTL_DAYS = 7;
+
 class StateStore {
-  constructor(filePath) {
+  constructor(filePath, recordTtlDays = DEFAULT_RECORD_TTL_DAYS) {
     this.filePath = filePath;
+    this.recordTtlMs = recordTtlDays * 24 * 60 * 60 * 1000;
     this.records = new Map();
     this._load();
   }
@@ -13,13 +16,36 @@ class StateStore {
       const raw = fs.readFileSync(this.filePath, 'utf8');
       const data = JSON.parse(raw);
       if (Array.isArray(data)) {
-        for (const key of data) this.records.set(key, { status: 'started', attempts: 1 });
+        // Legacy format: a bare list of keys. Stamped with "now" so the TTL sweep ages them out
+        // over the normal window instead of deleting them on the very first load (which would
+        // drop a record for a call that is still in progress).
+        const migratedAt = new Date().toISOString();
+        for (const key of data) this.records.set(key, { status: 'started', attempts: 1, updatedAt: migratedAt });
       } else {
         this.records = new Map(Object.entries(data));
       }
     } catch {
       this.records = new Map();
     }
+    this.pruneExpired();
+  }
+
+  // Records are keyed by symbol|period|earningsDate, so they can never be replayed once the
+  // date has passed - but they were also never removed, so the file and the in-memory Map grew
+  // forever. For a process intended to run indefinitely that is an unbounded leak, so anything
+  // older than the TTL is dropped on load and on each daily sweep.
+  pruneExpired(now = Date.now()) {
+    let removed = 0;
+    for (const [key, record] of [...this.records]) {
+      const stamp = record && record.updatedAt ? Date.parse(record.updatedAt) : NaN;
+      // Legacy records carry no timestamp; treat them as expired so they age out once.
+      if (Number.isNaN(stamp) || now - stamp > this.recordTtlMs) {
+        this.records.delete(key);
+        removed++;
+      }
+    }
+    if (removed) this._save();
+    return removed;
   }
 
   _save() {
@@ -49,6 +75,22 @@ class StateStore {
     const record = this.records.get(key);
     if (!record) return;
     this.records.set(key, { ...record, status: 'started', updatedAt: new Date().toISOString() });
+    this._save();
+  }
+
+  // Terminal state: this call ran and is over. Needed because "was started, and its stream is
+  // no longer active" is ambiguous - it means either "stopped by hand, reacquire it" or "the
+  // call ended normally". Without a terminal state the second case was indistinguishable from
+  // the first, so a finished call was re-recorded on every poll for the rest of the retry
+  // window (up to 2 hours), producing duplicate transcripts and a new tab each time.
+  markCompleted(key, reason) {
+    const record = this.records.get(key) || {};
+    this.records.set(key, {
+      ...record,
+      status: 'completed',
+      completedReason: reason,
+      updatedAt: new Date().toISOString(),
+    });
     this._save();
   }
 
