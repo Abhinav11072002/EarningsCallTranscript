@@ -16,6 +16,7 @@ const { parseCountdownToMinutes, minutesUntilCall, rowKey } = require('../src/ta
 const { StateStore } = require('../src/stateStore');
 const { resolveLogPath, pruneOldLogFiles } = require('../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow } = require('../src/extensionTrigger');
+const { createObservability } = require('../src/observability');
 
 let passed = 0;
 const failures = [];
@@ -303,6 +304,79 @@ check('logRotation: deletes only day-files past the horizon', () => {
 
 check('logRotation: missing directory is not an error', () => {
   assert.deepStrictEqual(pruneOldLogFiles(path.join(os.tmpdir(), 'cw-does-not-exist-xyz'), 14), []);
+});
+
+// ---------------------------------------------------------------- observability
+
+// The shutdown summary is the one artifact an operator reads after leaving this running all
+// day, and it is produced on a code path that only executes at exit - so it was shipped
+// broken: on a day with no recorded calls, summarize() took its "no ledger file" branch,
+// which returned an object literal missing `retriedThenStarted`, and the shutdown handler's
+// `.retriedThenStarted.length` threw. Observed live as "Could not produce the daily summary:
+// Cannot read properties of undefined (reading 'length')". These assert the SHAPE, not just
+// the counts, on both branches - that is what the bug was.
+const SUMMARY_KEYS = ['date', 'total', 'started', 'failed', 'retriedThenStarted', 'skippedLate'];
+
+function withTempObs(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-obs-'));
+  const quiet = { info() {}, warn() {}, error() {} };
+  try {
+    return fn(createObservability(dir, quiet), dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+check('observability: summary of an empty day has every field an operator prints', () => {
+  withTempObs((obs) => {
+    const s = obs.summarize();
+    assert.deepStrictEqual(Object.keys(s).sort(), [...SUMMARY_KEYS].sort());
+    for (const k of ['started', 'failed', 'retriedThenStarted', 'skippedLate']) {
+      assert.ok(Array.isArray(s[k]), `${k} must be an array, got ${typeof s[k]}`);
+    }
+    assert.strictEqual(s.total, 0);
+  });
+});
+
+check('observability: shutdown summary block runs without throwing on an empty day', () => {
+  withTempObs((obs) => {
+    // Exercises the exact expressions in the SIGINT handler in src/index.js.
+    const s = obs.summarize();
+    const line = `started=${s.started.length}, failed=${s.failed.length}, ` +
+      `skipped-late=${s.skippedLate.length}, recovered-on-retry=${s.retriedThenStarted.length}`;
+    assert.strictEqual(line, 'started=0, failed=0, skipped-late=0, recovered-on-retry=0');
+    s.failed.forEach((f) => String(f.error));
+    s.skippedLate.forEach((x) => String(x.minsPastStart));
+    s.started.filter((x) => (x.lateBySec ?? 0) > 60).forEach((x) => String(x.label));
+  });
+});
+
+check('observability: a call that failed then started is reported once, as recovered', () => {
+  withTempObs((obs) => {
+    obs.recordOutcome({ status: 'failed', symbol: 'AAPL', fiscalPeriod: '2026Q2', error: 'boom' });
+    obs.recordOutcome({ status: 'started', symbol: 'AAPL', fiscalPeriod: '2026Q2', secondsLateVsScheduled: 12 });
+    obs.recordOutcome({ status: 'failed', symbol: 'MSFT', fiscalPeriod: '2026Q2', error: 'no link' });
+    obs.recordOutcome({ status: 'skipped-late', symbol: 'TSLA', fiscalPeriod: '2026Q2', minsPastStart: 40 });
+
+    const s = obs.summarize();
+    assert.deepStrictEqual(Object.keys(s).sort(), [...SUMMARY_KEYS].sort());
+    assert.strictEqual(s.total, 4);
+    assert.deepStrictEqual(s.started.map((x) => x.label), ['AAPL 2026Q2']);
+    assert.deepStrictEqual(s.failed.map((x) => x.label), ['MSFT 2026Q2'], 'AAPL must not be listed as failed');
+    assert.deepStrictEqual(s.retriedThenStarted, ['AAPL 2026Q2']);
+    assert.deepStrictEqual(s.skippedLate.map((x) => x.label), ['TSLA 2026Q2']);
+  });
+});
+
+check('observability: a corrupt ledger line is skipped, not fatal', () => {
+  withTempObs((obs, dir) => {
+    obs.recordOutcome({ status: 'started', symbol: 'NVDA', fiscalPeriod: '2026Q2' });
+    const led = fs.readdirSync(dir).find((f) => f.startsWith('outcomes-'));
+    fs.appendFileSync(path.join(dir, led), '{not json' + String.fromCharCode(10));
+    const s = obs.summarize();
+    assert.strictEqual(s.started.length, 1);
+    assert.strictEqual(s.total, 2, 'total counts raw lines, including the unparseable one');
+  });
 });
 
 // ---------------------------------------------------------------- report

@@ -112,7 +112,13 @@ function createObservability(dataDir, logger) {
       try {
         lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
       } catch {
-        return { date: dayStamp(now), total: 0, started: [], failed: [], skippedLate: [] };
+        // No ledger for today yet - the normal state on a quiet day, or before the first
+        // call of one. This deliberately falls THROUGH to the single return below instead
+        // of returning its own object literal: the hand-written early return that used to
+        // be here omitted `retriedThenStarted`, so the shutdown handler's
+        // `summary.retriedThenStarted.length` threw and every clean Ctrl+C on a day with
+        // no recorded calls lost the summary it exists to print.
+        lines = [];
       }
       const started = [];
       const failed = [];
