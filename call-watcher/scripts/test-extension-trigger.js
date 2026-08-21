@@ -43,13 +43,20 @@ const logger = {
   const start = Date.now();
   console.log(`Triggering extension for ${symbol} ${year}${period} (timing from now)...`);
 
+  let failed = false;
   try {
     await triggerExtension(context, portalPage, row, config, logger);
     console.log(`SUCCESS in ${((Date.now() - start) / 1000).toFixed(1)}s`);
   } catch (err) {
     console.log(`FAILED after ${((Date.now() - start) / 1000).toFixed(1)}s: ${err.message}`);
-    process.exit(1);
+    failed = true;
+  } finally {
+    // Disconnect explicitly: the open CDP connection keeps the event loop alive, so without
+    // this the script hangs after finishing and leaves a node process holding the connection.
+    // (Safe on connectOverCDP - it closes the transport, not the operator's Chrome.)
+    await browser.close().catch(() => {});
   }
+  process.exit(failed ? 1 : 0);
 })().catch((err) => {
   console.error('Test failed to run:', err.message);
   process.exit(1);

@@ -29,10 +29,6 @@ class StateStore {
     fs.renameSync(tempPath, this.filePath);
   }
 
-  has(key) {
-    return this.records.has(key);
-  }
-
   get(key) {
     return this.records.get(key) || null;
   }

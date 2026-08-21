@@ -121,7 +121,6 @@ async function extractRows(page) {
             symbol,
             fiscalPeriod: fiscalPeriod ? fiscalPeriod.text : '',
             transcriptionTimeText: transcriptionTime ? transcriptionTime.text : '',
-            transcriptionTimeEpoch: null,
             dialinLink: dialinLink ? dialinLink.href : null,
           });
         }
@@ -133,18 +132,36 @@ async function extractRows(page) {
   );
 }
 
+// Anchored to the WHOLE cell text on purpose. The previous version searched for each unit
+// anywhere in the string, which silently produced confident-but-wrong numbers whenever the
+// geometry scrape picked up a wrapper element carrying the entire row's concatenated text:
+// "2026-08-19AAPL2026Q23 hrs 17 min 19 sec" parsed as 1397 min (the hrs pattern took "23" out
+// of "2026Q23") instead of the real 197. Because the parse "succeeded", nothing warned and the
+// call was simply skipped as out-of-window. Returning null for anything that isn't cleanly a
+// countdown makes that case loud instead.
+const COUNTDOWN_PATTERN = new RegExp(
+  '^(-?)\\s*' +
+    '(?:(\\d+(?:\\.\\d+)?)\\s*days?)?\\s*' +
+    '(?:(\\d+(?:\\.\\d+)?)\\s*hrs?)?\\s*' +
+    '(?:(\\d+(?:\\.\\d+)?)\\s*min(?:ute)?s?)?\\s*' +
+    '(?:(\\d+(?:\\.\\d+)?)\\s*sec(?:ond)?s?)?\\s*$',
+  'i'
+);
+
 function parseCountdownToMinutes(text) {
   if (!text) return null;
-  const days = /(-?\d+(?:\.\d+)?)\s*days?/i.exec(text);
-  const hrs = /(-?\d+(?:\.\d+)?)\s*hrs?/i.exec(text);
-  const min = /(-?\d+(?:\.\d+)?)\s*min/i.exec(text);
-  const sec = /(-?\d+(?:\.\d+)?)\s*sec/i.exec(text);
+  const match = COUNTDOWN_PATTERN.exec(String(text).trim());
+  if (!match) return null;
+  const [, sign, days, hrs, min, sec] = match;
+  // The pattern's parts are all optional, so it also matches an empty string - require that at
+  // least one real unit was present before trusting it.
   if (!days && !hrs && !min && !sec) return null;
-  const d = days ? parseFloat(days[1]) : 0;
-  const h = hrs ? parseFloat(hrs[1]) : 0;
-  const m = min ? parseFloat(min[1]) : 0;
-  const s = sec ? parseFloat(sec[1]) : 0;
-  return d * 1440 + h * 60 + m + s / 60;
+  const total =
+    (days ? parseFloat(days) : 0) * 1440 +
+    (hrs ? parseFloat(hrs) : 0) * 60 +
+    (min ? parseFloat(min) : 0) +
+    (sec ? parseFloat(sec) : 0) / 60;
+  return sign === '-' ? -total : total;
 }
 
 const MONTH_ABBR = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
@@ -188,14 +205,11 @@ function parseAbsoluteDateTimeToMinutes(text) {
   return (actualUTCms - Date.now()) / 60000;
 }
 
+// The Transcription Time cell renders in exactly two shapes, so both are tried in turn and
+// anything else deliberately yields null (which the caller logs, rather than guessing).
+// A third path used to read a raw epoch from the cell, but no epoch is exposed in the DOM -
+// extractRows could only ever supply null, so it was unreachable and has been removed.
 function minutesUntilCall(row) {
-  if (row.transcriptionTimeEpoch) {
-    const num = Number(row.transcriptionTimeEpoch);
-    if (!Number.isNaN(num)) {
-      const epochMs = num < 1e12 ? num * 1000 : num; // seconds vs ms epoch
-      return (epochMs - Date.now()) / 60000;
-    }
-  }
   const countdown = parseCountdownToMinutes(row.transcriptionTimeText);
   if (countdown !== null) return countdown;
   return parseAbsoluteDateTimeToMinutes(row.transcriptionTimeText);

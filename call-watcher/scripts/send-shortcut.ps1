@@ -155,7 +155,18 @@ $focusResult = [NativeMethods]::SetForegroundWindow($hwnd)
 
 Start-Sleep -Milliseconds 250
 $fgWndAfter = [NativeMethods]::GetForegroundWindow()
-Write-Output "SetForegroundWindow result: $focusResult, foreground after matches target: $($fgWndAfter -eq $hwnd)"
+$foregroundMatches = ($fgWndAfter -eq $hwnd)
+Write-Output "SetForegroundWindow result: $focusResult, foreground after matches target: $foregroundMatches"
+
+# Abort rather than inject blindly. If the target window is not actually in the foreground the
+# keystroke lands somewhere else entirely: at best nothing opens (previously surfaced as a
+# confusing "popup never appeared" timeout), at worst an already-open popup gets driven against
+# a different tab and records the wrong call. This is also the signal that the screen is locked
+# or another app stole focus, which the caller could not otherwise distinguish.
+if (-not $foregroundMatches) {
+    Write-Error "Target window is not in the foreground after SetForegroundWindow (screen locked, or another window stole focus). Refusing to inject keystrokes."
+    exit 2
+}
 
 # Parse SendKeys-style modifier syntax and inject via SendInput: modifiers down (in order),
 # key down, key up, modifiers up (reverse order) - mirrors how a real keypress is sequenced.
@@ -177,3 +188,11 @@ $sequence = @($downs.ToArray()) + @($ups.ToArray())
 $inputSize = [System.Runtime.InteropServices.Marshal]::SizeOf([type][NativeMethods+INPUT])
 $sent = [NativeMethods]::SendInput([uint32]$sequence.Length, $sequence, $inputSize)
 Write-Output "SendInput injected $sent of $($sequence.Length) events for keys: $Keys"
+
+# A partial injection means the key sequence Chrome saw was malformed (e.g. Ctrl pressed but
+# never released), so the command almost certainly did not fire - and a stuck modifier would
+# then corrupt the user's own typing. Previously this was printed and ignored.
+if ($sent -ne $sequence.Length) {
+    Write-Error "SendInput injected only $sent of $($sequence.Length) events - the shortcut did not fire cleanly."
+    exit 3
+}

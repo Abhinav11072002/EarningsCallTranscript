@@ -6,9 +6,14 @@ needed, handles the registration gate (fills identity fields, or clicks through 
 account-based flow like Q4 Inc.'s events platform), joins the call, and triggers the pinned
 "FMP transcripts" Chrome extension to start transcription with the right Symbol/Year/Period.
 
-See `../.claude/plans/validated-honking-puddle.md` (or ask Claude) for the original design
-reasoning. The actual extension-trigger mechanism ended up more involved than that plan assumed
-(see below) - several real Chrome/Windows quirks only showed up under live testing.
+Requires **Node 22+** (checked at startup): the extension popup is driven over a raw CDP
+WebSocket using the global `WebSocket` class, which older runtimes do not expose. On an older
+Node everything up to the final step works and then every call fails, so the check is explicit
+rather than left to `engines`.
+
+The sections below capture the non-obvious mechanics - most of them exist because of a real
+Chrome/Windows behaviour found by live testing, not by design. Where a comment or section says
+"verified", it was reproduced directly against the live browser.
 
 ## How the extension gets triggered (the tricky part)
 
@@ -137,17 +142,34 @@ cd call-watcher
 npm install
 ```
 
-Run the provider registration fixture suite against the already-running debug Chrome with:
+### Tests
 
 ```powershell
+npm test               # everything: unit, then the two browser suites
+npm run test:unit      # pure logic - no browser needed, ~1s
 npm run test:registration
+npm run test:resolver
 ```
 
-To preserve a real provider layout for regression testing, open its registration page in the
-debug Chrome and run `npm run capture:registration -- zoom provider.example`. The optional
-fragment selects the matching tab. The capture stores frame URLs and sanitized HTML under
-`test/fixtures/captured/<provider>/page.json`; input values, emails, phone numbers, tokens,
-and API-key fields are redacted before writing.
+`npm run test:unit` covers the parts that are easy to get subtly wrong and used to have no
+coverage at all: the three time formats (including the America/New_York DST math), dedupe keys,
+the retry state machine and its attempt cap, log retention, and the fiscal-period split shared
+by the write and read paths. It needs no Chrome, so it is the one to run before every commit.
+
+The other two need the debug Chrome running (they drive real pages). Two further scripts are
+manual diagnostics rather than tests - `scripts/test-extension-trigger.js <SYM> <YEAR> <Q>`
+drives the whole popup path once and prints the timing, and `scripts/test-click-resolver.js
+<SYM>` resolves one truncated link. Both start a **real** transcription against whatever tab is
+active, so stop the stream from the popup afterwards.
+
+To cover a new provider, open its registration page in the debug Chrome and run
+`npm run capture:registration -- <provider> [url-fragment]` (the fragment selects the matching
+tab). That writes `test/fixtures/registration/<provider>.html`, which the registration suite
+**auto-discovers** - no code change needed - plus a full multi-frame dump under
+`test/fixtures/captured/<provider>/` for reference when the gate lives in an iframe (gitignored;
+regenerate on demand). Emails, phone numbers, input values, tokens and API-key fields are
+redacted before writing. Fixtures named `rejected*.html` are treated as negative cases (the gate
+is expected to stay pending).
 
 ## Running
 
@@ -155,9 +177,13 @@ and API-key fields are redacted before writing.
 npm start
 ```
 
-This connects to the already-running Chrome, opens (or reuses) a tab on the portal URL from
-`config.json`, and polls the table every `pollIntervalMs`. Logs go to the console and to
-`data/call-watcher.log`. Each call log includes the pipeline duration and current queue depth.
+At startup it verifies Chrome was launched with `--auto-accept-this-tab-capture` and logs an
+ERROR if not - without that flag every capture is blocked by a native consent bubble that no
+automation can dismiss, which is otherwise invisible until transcripts turn up empty.
+
+It then connects to the already-running Chrome, opens (or reuses) a tab on the portal URL from
+`config.json`, and polls the table every `pollIntervalMs`. Each call log includes the pipeline
+duration and current queue depth.
 If Chrome or the portal tab disconnects, the watcher reconnects and resumes on the next poll.
 Calls are recorded in `data/processed.json` to prevent duplicate work,
 but each due call is reconciled against the extension's live `activeStreams` storage. If its
@@ -166,6 +192,37 @@ was created, the old claim is removed and the call is retried. Delete `data/proc
 force reprocessing of every eligible call (e.g. while testing).
 
 Stop with **Ctrl+C**. Tabs already opened for in-flight calls are left open, not force-closed.
+Shutdown prints a summary of the day (started / failed / missed / recovered-on-retry).
+
+### What it writes to `data/` (and how to check on it)
+
+| File | Purpose |
+|---|---|
+| `call-watcher-YYYY-MM-DD.log` | One file per day, kept for `logRetentionDays` (14). |
+| `outcomes-YYYY-MM-DD.jsonl` | Append-only, one line per call attempt. **Never pruned.** |
+| `heartbeat.json` | Overwritten every poll - liveness and what the poll last saw. |
+| `processed.json` | Dedupe/retry state. Delete to force reprocessing while testing. |
+
+The two questions that matter after the fact are answered by the first two files:
+
+- *Did we capture X, and was it the right page?* — `outcomes-*.jsonl` records, per attempt, the
+  dial-in URL, the URL actually resolved to, the **page title actually recorded**, how late the
+  start was versus the scheduled time, and the error on failure. Six captures once ran against a
+  page titled "Page Not Found" with nothing recording that fact; this is that record.
+- *Is it alive, and is it still seeing data?* — `heartbeat.json`. Its `warnings` block flags the
+  "running but blind" states that otherwise look exactly like a quiet day: `noRows` (portal
+  session expired or the view changed), `noLinks` (the Dialin Link column moved or was renamed),
+  and `queueBacklog`. Those also log at ERROR.
+
+Logs are per-day files rather than one growing file. An earlier version pruned individual log
+*lines* older than an hour, which was doubly wrong: it destroyed exactly the evidence needed to
+diagnose a morning failure noticed in the afternoon, and it barely worked - entries containing
+newlines produce continuation lines with no timestamp, so on a real log only 4 of 293 lines were
+even prunable.
+
+For an unattended run, point a scheduled task at `heartbeat.json` and alert if `updatedAt` is
+stale by more than ~90s or any `warnings` flag is true. That single check covers every silent
+stop: crash, wedged poll, lost Chrome, or expired portal session.
 
 ## Configuration (`config.json`)
 
@@ -175,10 +232,23 @@ Stop with **Ctrl+C**. Tabs already opened for in-flight calls are left open, not
 - `retryWindowMinutes` — how long after the scheduled start a call remains eligible for
   reacquisition when its matching extension stream was manually stopped or never started.
 - `maxAttempts` — maximum automatic attempts after a failed pipeline; retries use bounded
-  exponential backoff so one broken provider cannot consume the queue indefinitely.
+  exponential backoff (30s, 60s, 120s, …) so one broken provider cannot consume the queue
+  indefinitely. Note this only works because the poll loop preserves the existing record when
+  re-claiming: deleting it first made `claim()` restart the count at 1 every time, which
+  silently disabled the cap and pinned the backoff at 30s — roughly 200 retries instead of 4.
+- `lateStartGraceMinutes` — how far past the scheduled start a call may be **first** attempted
+  (10). Beyond this it is recorded as `skipped-late` rather than started, because joining an
+  hour late still "succeeds" and would otherwise make a total miss look like a capture.
+  Reacquiring a call that *was* started stays allowed for the whole `retryWindowMinutes`.
+- `streamConfirmTimeoutMs` / `cdpCommandTimeoutMs` / `shortcutTimeoutMs` — bounds on the three
+  steps of the trigger path. These exist because the trigger runs inside the pipeline lock, so
+  any unbounded wait there stalls not just its own call but every later one for the rest of the
+  day. One such hang was verified: the popup closes the instant its tab loses focus, and an
+  in-flight CDP command with no close handler never settles.
+- `logRetentionDays` — how many daily log files to keep (14). The outcomes ledger is never pruned.
 - `popupTimeoutMs` — how long to wait for the popup to appear via CDP after sending the
-  shortcut (the stream-item confirmation step afterward has its own separate 8s budget in
-  `extensionTrigger.js`, unaffected by this value). Set higher than you'd expect (18s) because
+  shortcut (the stream-item confirmation step afterward has its own `streamConfirmTimeoutMs`
+  budget, unaffected by this value). Set higher than you'd expect (18s) because
   of a real observed failure: MV3 puts the extension's service worker to sleep after ~30s of
   inactivity, and the first shortcut of a session can trigger a "cold start" (Chrome has to
   spin the service worker back up before `background.js` even runs) that takes meaningfully

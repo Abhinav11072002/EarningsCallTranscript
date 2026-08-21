@@ -4,11 +4,16 @@
   "private": true,
   "description": "Watches the FMP admin earnings-call table and auto-joins + starts transcription for calls starting soon.",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node src/index.js",
     "test:registration": "node scripts/test-form-filler.js",
     "test:resolver": "node scripts/test-webcast-resolver.js",
-    "capture:registration": "node scripts/capture-registration-fixture.js"
+    "capture:registration": "node scripts/capture-registration-fixture.js",
+    "test:unit": "node scripts/test-unit.js",
+    "test": "node scripts/test-unit.js && node scripts/test-form-filler.js && node scripts/test-webcast-resolver.js"
   },
   "dependencies": {
     "playwright-core": "^1.47.2"

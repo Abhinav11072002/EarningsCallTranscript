@@ -36,6 +36,21 @@ function redactDom(html) {
       html: redactDom(await frame.content()),
     });
   }
+  // Two outputs, because they serve different purposes:
+  //
+  // 1. registration/<provider>.html - the main frame, written where the registration test
+  //    auto-discovers fixtures, so capturing a new provider immediately extends coverage.
+  //    Previously capture only produced the JSON below, which no test could read - so every
+  //    capture was dead weight and new providers silently stayed untested.
+  // 2. captured/<provider>/page.json - the full multi-frame dump, for the cases where the
+  //    gate lives in an iframe and the main frame alone is not enough to reproduce it.
+  //    Gitignored: it is raw reference material, not a test input.
+  const registrationDir = path.join(__dirname, '..', 'test', 'fixtures', 'registration');
+  fs.mkdirSync(registrationDir, { recursive: true });
+  const htmlPath = path.join(registrationDir, `${provider}.html`);
+  const mainFrame = frames[0];
+  fs.writeFileSync(htmlPath, mainFrame ? mainFrame.html : '');
+
   const outputDir = path.join(__dirname, '..', 'test', 'fixtures', 'captured', provider);
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(path.join(outputDir, 'page.json'), JSON.stringify({
@@ -44,7 +59,14 @@ function redactDom(html) {
     pageUrl: page.url(),
     frames,
   }, null, 2));
-  console.log(`Captured sanitized fixture for ${provider}: ${outputDir}`);
+
+  console.log(`Captured ${provider}:`);
+  console.log(`  test fixture (auto-discovered by npm run test:registration): ${htmlPath}`);
+  console.log(`  full frame dump (reference only):                            ${outputDir}`);
+  if (frames.length > 1) {
+    console.log(`  note: page had ${frames.length} frames; if the gate is inside an iframe, the`);
+    console.log('        main-frame fixture may not reproduce it - check the frame dump.');
+  }
   await browser.close();
 })().catch((error) => {
   console.error('Fixture capture failed:', error.message);

@@ -30,8 +30,15 @@ const logger = {
   }
 
   console.log(`Resolving truncated dial-in link for ${symbol}...`);
-  const resolved = await resolveDialinLinkByClick(context, portalPage, symbol, logger);
-  console.log('RESULT:', resolved);
+  try {
+    const resolved = await resolveDialinLinkByClick(context, portalPage, symbol, logger);
+    console.log('RESULT:', resolved);
+  } finally {
+    // Without this the open CDP connection keeps the event loop alive and the script hangs,
+    // leaving a stray node process behind. (Safe on connectOverCDP - transport only.)
+    await browser.close().catch(() => {});
+  }
+  process.exit(0);
 })().catch((err) => {
   console.error('Test failed:', err.message);
   process.exit(1);

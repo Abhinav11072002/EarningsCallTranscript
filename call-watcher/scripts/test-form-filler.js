@@ -9,7 +9,15 @@ const { loadConfig } = require('../src/loadConfig');
 const config = loadConfig();
 
 const fixtureDir = path.join(__dirname, '..', 'test', 'fixtures', 'registration');
-const fixtures = ['zoom.html', 'q4.html', 'webcaster.html', 'choruscall.html', 'on24.html'];
+// Auto-discovered rather than hardcoded, so a fixture captured via
+// `npm run capture:registration <provider>` is covered without editing this file.
+// "rejected*" fixtures are negative cases (the gate is expected to REMAIN pending) and are
+// asserted separately below, so they are excluded from the positive set.
+const NEGATIVE_FIXTURE_PREFIX = 'rejected';
+const fixtures = fs
+  .readdirSync(fixtureDir)
+  .filter((name) => name.endsWith('.html') && !name.startsWith(NEGATIVE_FIXTURE_PREFIX))
+  .sort();
 const identity = config.dummyIdentity;
 const logger = {
   info: (message) => console.log('[INFO]', message),

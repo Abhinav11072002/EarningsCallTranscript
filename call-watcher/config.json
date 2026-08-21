@@ -6,6 +6,11 @@
   "retryWindowMinutes": 120,
   "maxAttempts": 4,
   "popupTimeoutMs": 18000,
+  "streamConfirmTimeoutMs": 8000,
+  "cdpCommandTimeoutMs": 10000,
+  "shortcutTimeoutMs": 30000,
+  "lateStartGraceMinutes": 10,
+  "logRetentionDays": 14,
   "extensionShortcutSendKeys": "^+y",
   "extensionId": null,
   "dummyIdentity": {
@@ -26,6 +31,7 @@
     "zoom.us",
     "q4inc.com",
     "notified.com",
-    "on24.com"
+    "on24.com",
+    "qcnl.tv"
   ]
 }

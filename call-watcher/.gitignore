@@ -6,3 +6,13 @@ data/processed.json
 # extension's install path and therefore differs per machine/profile). Never commit this -
 # sharing it is exactly what makes two machines overwrite each other's IDs on every pull.
 config.local.json
+
+# Raw multi-frame page captures - reference material regenerated on demand by
+# `npm run capture:registration`, not a test input. The usable fixture it writes is the
+# committed test/fixtures/registration/<provider>.html.
+test/fixtures/captured/
+
+# Runtime artifacts: per-day logs, the outcomes ledger, the heartbeat and the dedupe/retry
+# state. All machine- and run-specific; regenerated automatically.
+data/heartbeat.json
+data/outcomes-*.jsonl
