@@ -1,20 +1,22 @@
-// Standalone timing test for the extension-trigger step in isolation (bring tab to front ->
-// send shortcut -> find popup via CDP -> fill -> click Start -> confirm stream). Doesn't touch
-// the dedupe store, webcast resolution, or registration - just exercises the exact code path
-// that timed out for ARAY, so we can measure whether a cold service worker now fits inside
-// the (now 18s) popupTimeoutMs budget.
+// DIAGNOSTIC - run by hand. Not part of `npm test`.
 //
-// For a meaningful test, the extension's service worker needs to actually be dormant first -
-// avoid pressing Ctrl+Shift+Y or otherwise touching the extension for 30-60s before running
-// this, otherwise it'll stay warm from that interaction and the test won't prove anything.
+// Answers: "is the popup path itself working, and how long does it take?"
 //
-// Usage: node scripts/test-extension-trigger.js <SYMBOL> <YEAR> <PERIOD>
-// e.g.:  node scripts/test-extension-trigger.js TEST 2026 Q1
+// Reach for it when captures stop starting and you need to know whether the fault is in
+// finding the call or in triggering the extension. Runs the trigger step alone - bring tab to
+// front, send the shortcut, find the popup over CDP, fill it, click Start, confirm the stream -
+// against whatever tab is in front, skipping resolution and registration entirely.
+//
+// WARNING: this one DOES start a real transcription, so it posts to the live backend. Use a
+// throwaway symbol and stop the stream afterwards.
+//
+// Usage: node scripts/diagnostics/diag-extension-trigger.js TEST 2026 Q1
+
 const { chromium } = require('playwright-core');
-const { loadConfig } = require('../src/loadConfig');
+const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
-const { triggerExtension } = require('../src/extensionTrigger');
+const { triggerExtension } = require('../../src/extensionTrigger');
 
 const [symbol, year, period] = process.argv.slice(2);
 if (!symbol || !year || !period) {

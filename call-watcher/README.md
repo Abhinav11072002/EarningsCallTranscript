@@ -30,7 +30,7 @@ each found by testing against the real thing rather than assumed up front:
    (`scripts/send-shortcut.ps1`) injects synthetic input at the same level as real hardware,
    which Chrome's command shortcuts do respond to.
 2. **Taking the foreground is the least reliable step, and needed real work.** Measured with a
-   dedicated harness (`node scripts/test-popup-reliability.js 30`, which opens and fills the
+   dedicated harness (`node scripts/diagnostics/diag-popup-reliability.js 30`, which opens and fills the
    popup 30 times without starting recordings): the first version scored **0/30** whenever any
    non-Chrome window held the foreground, because Windows silently refuses
    `SetForegroundWindow` from a process that does not already own it - it just returns false.
@@ -49,7 +49,7 @@ each found by testing against the real thing rather than assumed up front:
    whose title matches the actual target tab (passed in from `extensionTrigger.js` via
    `targetPage.title()`), falling back to `MainWindowHandle` if no title matches.
 4. **Playwright never sees the popup as a page.** Confirmed directly with
-   `scripts/diagnose-popup.js`: the popup opens visibly and is listed by Chrome's own
+   `scripts/diagnostics/diag-popup.js`: the popup opens visibly and is listed by Chrome's own
    `/json/list` HTTP endpoint, but `context.pages()` / the `'page'` event never see it -
    Playwright's auto-attach doesn't reach it, most likely because it isn't spawned as a child
    of any target Playwright already tracks. So `extensionTrigger.js` finds it via that same
@@ -182,6 +182,22 @@ cd call-watcher
 npm install
 ```
 
+### Where things live
+
+```
+src/                    everything the watcher runs on
+  send-shortcut.ps1     RUNTIME - the trusted keystroke every capture depends on
+scripts/                commands you run: supervise, stop, report
+scripts/tests/          the automated suite (npm test)
+scripts/diagnostics/    probes you run by hand when something specific breaks
+test/fixtures/          pages the suite runs against
+data/                   logs, ledger, state - all gitignored, all regenerated
+```
+
+`scripts/` used to hold all three kinds at once, with `test-` meaning both "part of the suite"
+and "a thing I once ran by hand", next to a PowerShell file that was neither. The split is by
+what you do with a file, and [scripts/README.md](scripts/README.md) lists every one.
+
 ### Knowing nothing was lost
 
 `npm run report` answers the question the log cannot. The outcomes ledger records what was
@@ -267,11 +283,13 @@ unnoticed. Timing is asserted too (a fixture over 20s fails): everything here ru
 pipeline lock, so a slow page is not a cosmetic problem, it delays every later call in the same
 15-minute window.
 
-The other four need the debug Chrome running (they drive real pages). Two further scripts are
-manual diagnostics rather than tests - `scripts/test-extension-trigger.js <SYM> <YEAR> <Q>`
-drives the whole popup path once and prints the timing, and `scripts/test-click-resolver.js
-<SYM>` resolves one truncated link. Both start a **real** transcription against whatever tab is
-active, so stop the stream from the popup afterwards.
+The other four need the debug Chrome running (they drive real pages).
+
+`scripts/diagnostics/` holds four probes that are **not** part of `npm test`. Each answers one
+question when something specific breaks, and says which in its own header - see
+[scripts/README.md](scripts/README.md) for the index. Three are read-only; the exception is
+`diag-extension-trigger.js`, which starts a **real** transcription against the active tab, so
+use a throwaway symbol and stop the stream from the popup afterwards.
 
 To cover a new provider, open its registration page in the debug Chrome and run
 `npm run capture:registration -- <provider> [url-fragment]` (the fragment selects the matching

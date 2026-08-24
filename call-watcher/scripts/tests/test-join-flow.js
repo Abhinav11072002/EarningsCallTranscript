@@ -8,13 +8,13 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { chromium } = require('playwright-core');
-const { advanceJoinFlow, describeJoinBlocker, findBrowserEntryAction } = require('../src/joinFlow');
-const { fillRegistrationForm } = require('../src/formFiller');
-const { loadConfig } = require('../src/loadConfig');
+const { advanceJoinFlow, describeJoinBlocker, findBrowserEntryAction } = require('../../src/joinFlow');
+const { fillRegistrationForm } = require('../../src/formFiller');
+const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
 const identity = config.dummyIdentity;
-const fixtureDir = path.join(__dirname, '..', 'test', 'fixtures', 'join');
+const fixtureDir = path.join(__dirname, '..', '..', 'test', 'fixtures', 'join');
 
 const quiet = process.argv.includes('--quiet');
 const logger = {

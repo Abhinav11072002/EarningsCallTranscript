@@ -9,16 +9,16 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test:registration": "node scripts/test-form-filler.js",
-    "test:resolver": "node scripts/test-webcast-resolver.js",
-    "capture:registration": "node scripts/capture-registration-fixture.js",
-    "test:unit": "node scripts/test-unit.js",
-    "test": "node scripts/test-unit.js && node scripts/test-form-filler.js && node scripts/test-webcast-resolver.js && node scripts/test-join-flow.js && node scripts/test-gauntlet.js",
-    "test:join": "node scripts/test-join-flow.js",
-    "test:gauntlet": "node scripts/test-gauntlet.js",
-    "report": "node scripts/report.js",
     "supervise": "node scripts/supervisor.js",
-    "stop": "node scripts/stop.js"
+    "stop": "node scripts/stop.js",
+    "report": "node scripts/report.js",
+    "test": "node scripts/tests/test-unit.js && node scripts/tests/test-form-filler.js && node scripts/tests/test-webcast-resolver.js && node scripts/tests/test-join-flow.js && node scripts/tests/test-gauntlet.js",
+    "test:unit": "node scripts/tests/test-unit.js",
+    "test:registration": "node scripts/tests/test-form-filler.js",
+    "test:resolver": "node scripts/tests/test-webcast-resolver.js",
+    "test:join": "node scripts/tests/test-join-flow.js",
+    "test:gauntlet": "node scripts/tests/test-gauntlet.js",
+    "capture:registration": "node scripts/tests/capture-registration-fixture.js"
   },
   "dependencies": {
     "playwright-core": "^1.47.2"

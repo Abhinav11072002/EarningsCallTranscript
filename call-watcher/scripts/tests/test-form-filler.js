@@ -3,12 +3,12 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
-const { fillRegistrationForm } = require('../src/formFiller');
-const { loadConfig } = require('../src/loadConfig');
+const { fillRegistrationForm } = require('../../src/formFiller');
+const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
 
-const fixtureDir = path.join(__dirname, '..', 'test', 'fixtures', 'registration');
+const fixtureDir = path.join(__dirname, '..', '..', 'test', 'fixtures', 'registration');
 // Auto-discovered rather than hardcoded, so a fixture captured via
 // `npm run capture:registration <provider>` is covered without editing this file.
 // "rejected*" fixtures are negative cases (the gate is expected to REMAIN pending) and are

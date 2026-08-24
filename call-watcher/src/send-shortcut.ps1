@@ -1,3 +1,13 @@
+# RUNTIME CODE - NOT A TEST SCRIPT. DO NOT DELETE.
+#
+# src/extensionTrigger.js invokes this on EVERY call. It is what forces the target Chrome
+# window into the OS foreground and injects a real, trusted keystroke, which is the only way
+# Chrome will grant the extension the activeTab permission its screen capture depends on.
+# Without this file nothing records at all.
+#
+# It lives in src/ rather than scripts/ for exactly that reason: it spent a while sitting among
+# the test files, one tidy-up away from being deleted as scaffolding.
+#
 <#
 Finds the specific chrome.exe process running with --remote-debugging-port=$Port (unambiguous,
 unlike matching by window title when multiple Chrome windows/profiles are open), forces real

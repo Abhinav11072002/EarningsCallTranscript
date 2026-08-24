@@ -12,18 +12,18 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('../src/tableWatcher');
-const { StateStore } = require('../src/stateStore');
-const { shouldSkipAsLate } = require('../src/dispatchRules');
-const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../src/concurrency');
-const { resolveLogPath, pruneOldLogFiles } = require('../src/logRotation');
-const { splitFiscalPeriod, streamMatchesRow } = require('../src/extensionTrigger');
-const { createObservability } = require('../src/observability');
-const { SeenLog, reconcile, formatReconciliation } = require('../src/reconciliation');
-const { blindReason } = require('../src/supervisorRules');
-const { validateConfig } = require('../src/validateConfig');
-const { acquireInstanceLock, releaseInstanceLock, refreshInstanceLock, lockPathFor } = require('../src/instanceLock');
-const { loadConfig } = require('../src/loadConfig');
+const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('../../src/tableWatcher');
+const { StateStore } = require('../../src/stateStore');
+const { shouldSkipAsLate } = require('../../src/dispatchRules');
+const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
+const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
+const { splitFiscalPeriod, streamMatchesRow } = require('../../src/extensionTrigger');
+const { createObservability } = require('../../src/observability');
+const { SeenLog, reconcile, formatReconciliation } = require('../../src/reconciliation');
+const { blindReason } = require('../../src/supervisorRules');
+const { validateConfig } = require('../../src/validateConfig');
+const { acquireInstanceLock, releaseInstanceLock, refreshInstanceLock, lockPathFor } = require('../../src/instanceLock');
+const { loadConfig } = require('../../src/loadConfig');
 const {
   zoomWebClientUrl,
   NATIVE_APP_PATTERN,
@@ -31,7 +31,7 @@ const {
   PRE_JOIN_TEXT_PATTERN,
   TERMINAL_STATE_PATTERN,
   LEGITIMATE_WAIT_PATTERN,
-} = require('../src/joinFlow');
+} = require('../../src/joinFlow');
 
 let passed = 0;
 const failures = [];
@@ -246,7 +246,7 @@ check('StateStore: expired records are pruned, fresh ones kept', () => {
 // ---------------------------------------------------------------- call tab lifecycle
 
 check('CallTabRegistry: closes finished calls and ages out the rest', () => {
-  const { CallTabRegistry } = require('../src/callTabs');
+  const { CallTabRegistry } = require('../../src/callTabs');
   const closed = [];
   const fakePage = (name) => ({
     isClosed: () => false,
@@ -272,7 +272,7 @@ check('CallTabRegistry: closes finished calls and ages out the rest', () => {
 });
 
 check('CallTabRegistry: re-registering a key does not leak the previous tab', () => {
-  const { CallTabRegistry } = require('../src/callTabs');
+  const { CallTabRegistry } = require('../../src/callTabs');
   const closed = [];
   const fakePage = (name) => ({ isClosed: () => false, close: () => { closed.push(name); return Promise.resolve(); } });
   const reg = new CallTabRegistry({ info: () => {}, warn: () => {} });
@@ -283,7 +283,7 @@ check('CallTabRegistry: re-registering a key does not leak the previous tab', ()
 });
 
 check('CallTabRegistry: drops tabs the user already closed', () => {
-  const { CallTabRegistry } = require('../src/callTabs');
+  const { CallTabRegistry } = require('../../src/callTabs');
   const reg = new CallTabRegistry({ info: () => {}, warn: () => {} });
   reg.register('gone', { isClosed: () => true, close: () => Promise.resolve() }, 'GONE');
   reg.sweep(() => false, 60 * 60 * 1000);
@@ -1260,6 +1260,22 @@ check('instanceLock: the lock frees itself on every exit a process controls', ()
   releaseInstanceLock(dir, { pid: process.pid });
   assert.ok(!fs.existsSync(lockPathFor(dir)), 'exiting must leave no lock behind');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- runtime assets
+
+check('send-shortcut.ps1 is where the code that shells out to it expects', () => {
+  // This path is built with path.join and only used when a real call fires, so nothing else
+  // here would notice it breaking - the first symptom would be every capture failing, live.
+  // It has already been moved once (out of scripts/, where it looked like test scaffolding).
+  const trigger = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'extensionTrigger.js'), 'utf8');
+  const match = trigger.match(/const SEND_SHORTCUT_SCRIPT = (path\.join\([^)]*\));/);
+  assert.ok(match, 'extensionTrigger.js no longer defines SEND_SHORTCUT_SCRIPT the expected way');
+
+  const srcDir = path.join(__dirname, '..', '..', 'src');
+  // eslint-disable-next-line no-eval -- evaluating our own source expression, with __dirname bound
+  const resolved = eval(match[1].replace('__dirname', JSON.stringify(srcDir)));
+  assert.ok(fs.existsSync(resolved), `extensionTrigger.js points at ${resolved}, which does not exist`);
 });
 
 // ---------------------------------------------------------------- report

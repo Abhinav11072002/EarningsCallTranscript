@@ -1,11 +1,18 @@
-// Standalone test: exercises ONLY resolveDialinLinkByClick for one symbol, without touching
-// the dedupe store, registration, or extension pipeline. Usage:
-//   node scripts/test-click-resolver.js BULL
+// DIAGNOSTIC - run by hand. Not part of `npm test`.
+//
+// Answers: "what URL does the portal actually open for this symbol?"
+//
+// Reach for it when a call fails with a link that looks wrong or truncated. Exercises ONLY
+// resolveDialinLinkByClick against the live table - no dedupe store, no registration, no
+// extension - so it is safe to run repeatedly and starts no recording.
+//
+// Usage: node scripts/diagnostics/diag-click-resolver.js BEEM
+
 const { chromium } = require('playwright-core');
-const { loadConfig } = require('../src/loadConfig');
+const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
-const { resolveDialinLinkByClick } = require('../src/dialinLinkClickResolver');
+const { resolveDialinLinkByClick } = require('../../src/dialinLinkClickResolver');
 
 const symbol = process.argv[2];
 if (!symbol) {

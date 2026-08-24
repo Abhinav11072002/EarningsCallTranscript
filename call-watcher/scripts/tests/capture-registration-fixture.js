@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
-const { loadConfig } = require('../src/loadConfig');
+const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
 
@@ -45,13 +45,13 @@ function redactDom(html) {
   // 2. captured/<provider>/page.json - the full multi-frame dump, for the cases where the
   //    gate lives in an iframe and the main frame alone is not enough to reproduce it.
   //    Gitignored: it is raw reference material, not a test input.
-  const registrationDir = path.join(__dirname, '..', 'test', 'fixtures', 'registration');
+  const registrationDir = path.join(__dirname, '..', '..', 'test', 'fixtures', 'registration');
   fs.mkdirSync(registrationDir, { recursive: true });
   const htmlPath = path.join(registrationDir, `${provider}.html`);
   const mainFrame = frames[0];
   fs.writeFileSync(htmlPath, mainFrame ? mainFrame.html : '');
 
-  const outputDir = path.join(__dirname, '..', 'test', 'fixtures', 'captured', provider);
+  const outputDir = path.join(__dirname, '..', '..', 'test', 'fixtures', 'captured', provider);
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(path.join(outputDir, 'page.json'), JSON.stringify({
     provider,

@@ -1,21 +1,26 @@
-// Measures how reliably the extension popup opens and accepts field values, over N iterations.
+// DIAGNOSTIC - run by hand. Not part of `npm test`.
 //
-// Deliberately stops short of clicking "Start Transcription": that would begin a real capture
-// and POST synthetic symbols to the production transcript backend. Everything up to and
-// including "the fields hold the right values" is exercised, which is the part that has to work
-// every single time - the click itself is a one-liner against an already-verified popup.
+// Answers: "does the popup open and accept its values EVERY time, or only usually?"
 //
-// Usage: node scripts/test-popup-reliability.js [iterations]
+// Reach for it after changing anything about focus or the keyboard shortcut. Repeats
+// open-and-fill N times and reports the success rate and timings. This is how the foreground
+// problem was measured: 0/30 before the ALT-tap fix, 30/30 after.
+//
+// Deliberately stops short of clicking Start, so it begins no capture and posts nothing to the
+// backend - everything up to "the fields hold the right values" is what has to work every time.
+//
+// Usage: node scripts/diagnostics/diag-popup-reliability.js 10
+
 const http = require('http');
 const path = require('path');
 const { execFile } = require('child_process');
 const { chromium } = require('playwright-core');
-const { loadConfig } = require('../src/loadConfig');
-const { splitFiscalPeriod } = require('../src/extensionTrigger');
+const { loadConfig } = require('../../src/loadConfig');
+const { splitFiscalPeriod } = require('../../src/extensionTrigger');
 
 const config = loadConfig();
 const iterations = Number(process.argv[2] || 10);
-const SCRIPT = path.join(__dirname, 'send-shortcut.ps1');
+const SCRIPT = path.join(__dirname, '..', '..', 'src', 'send-shortcut.ps1');
 
 const listTargets = () =>
   new Promise((resolve) => {

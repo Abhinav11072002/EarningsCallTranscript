@@ -19,13 +19,13 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { chromium } = require('playwright-core');
-const { advanceJoinFlow, describeJoinBlocker } = require('../src/joinFlow');
-const { fillRegistrationForm } = require('../src/formFiller');
-const { loadConfig } = require('../src/loadConfig');
+const { advanceJoinFlow, describeJoinBlocker } = require('../../src/joinFlow');
+const { fillRegistrationForm } = require('../../src/formFiller');
+const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
 const identity = config.dummyIdentity;
-const fixtureDir = path.join(__dirname, '..', 'test', 'fixtures', 'gauntlet');
+const fixtureDir = path.join(__dirname, '..', '..', 'test', 'fixtures', 'gauntlet');
 
 const verbose = process.argv.includes('--verbose');
 const logger = {

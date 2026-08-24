@@ -1,10 +1,19 @@
-// Standalone diagnostic: connects to the debug Chrome instance and reports every page
-// Playwright detects, via both the 'page' event and by polling context.pages(). Run this,
-// then manually press the extension's shortcut (or click its icon) and watch the output -
-// this tells us definitively whether Playwright's page-tracking sees the popup at all, since
-// extension action popups can be a different kind of CDP target than a regular tab.
+// DIAGNOSTIC - run by hand. Not part of `npm test`.
+//
+// Answers: "does Playwright see the extension popup at all?"
+//
+// Reach for it if the popup opens on screen but the watcher reports it timed out. Connects to
+// the debug Chrome and reports every page Playwright detects, via both the 'page' event and by
+// polling context.pages(). Run it, then press the extension shortcut yourself and watch.
+//
+// This is the script that settled the question originally: the popup IS listed by Chrome's own
+// /json/list endpoint but Playwright's page-tracking never sees it, which is why the popup is
+// driven over a raw CDP WebSocket instead of the Page API.
+//
+// Usage: node scripts/diagnostics/diag-popup.js
+
 const { chromium } = require('playwright-core');
-const { loadConfig } = require('../src/loadConfig');
+const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
 

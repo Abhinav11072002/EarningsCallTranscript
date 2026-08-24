@@ -3,14 +3,17 @@ const path = require('path');
 const http = require('http');
 const { describeJoinBlocker } = require('./joinFlow');
 
-const SEND_SHORTCUT_SCRIPT = path.join(__dirname, '..', 'scripts', 'send-shortcut.ps1');
+// Beside this file on purpose. It is runtime code, not tooling: every capture depends on it,
+// and while it sat in scripts/ among the test files it was one tidy-up away from being
+// deleted as scaffolding.
+const SEND_SHORTCUT_SCRIPT = path.join(__dirname, 'send-shortcut.ps1');
 
 const DEFAULT_SHORTCUT_TIMEOUT_MS = 30000;
 const DEFAULT_CDP_COMMAND_TIMEOUT_MS = 10000;
 const DEFAULT_POPUP_TIMEOUT_MS = 18000;
 const DEFAULT_STREAM_CONFIRM_TIMEOUT_MS = 8000;
 
-// Sends the extension's keyboard shortcut via scripts/send-shortcut.ps1, which finds the
+// Sends the extension's keyboard shortcut via src/send-shortcut.ps1, which finds the
 // exact chrome.exe process matching --remote-debugging-port (unambiguous, unlike matching by
 // window title when the user's regular Chrome is also open) and forces real OS-level
 // foreground focus onto it before sending the keys. Plain CDP page.bringToFront() alone isn't

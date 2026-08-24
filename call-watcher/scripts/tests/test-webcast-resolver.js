@@ -13,8 +13,8 @@
 // resolved to the WRONG page; they are kept as regression tests for exactly that.
 const http = require('http');
 const { chromium } = require('playwright-core');
-const { resolveWebcastPage } = require('../src/webcastResolver');
-const { loadConfig } = require('../src/loadConfig');
+const { resolveWebcastPage } = require('../../src/webcastResolver');
+const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
 const silent = { info: () => {}, warn: () => {} };
