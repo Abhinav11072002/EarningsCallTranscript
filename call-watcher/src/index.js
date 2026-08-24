@@ -7,6 +7,7 @@ const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
+const { shouldSkipAsLate } = require('./dispatchRules');
 const { triggerExtension, getActiveStreams, streamMatchesRow, splitFiscalPeriod } = require('./extensionTrigger');
 const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
 const { resolveLogPath, pruneOldLogFiles } = require('./logRotation');
@@ -315,7 +316,7 @@ async function main() {
     // first lets us read the extension's stream list once for the whole poll instead of once
     // per row, and lets us act on the most urgent call first.
     const retryWindowMinutes = Number(config.retryWindowMinutes ?? 5);
-    const lateStartGraceMinutes = Number(config.lateStartGraceMinutes ?? 10);
+    const lateStartGraceMinutes = Number(config.lateStartGraceMinutes ?? 0);
     const dueRows = [];
     for (const row of rows) {
       if (!row.dialinLink) continue;
@@ -337,16 +338,19 @@ async function main() {
       if (minsLeft <= -retryWindowMinutes) continue;
 
       const record = store.get(key);
-      // A call we have never attempted should not be started long after it began: joining an
-      // hour late still "succeeds" and gets logged as Done, which makes a total miss look
-      // like a capture. Reacquiring a call we DID start is still allowed for the full window.
-      if (!record && minsLeft <= -lateStartGraceMinutes) {
+      // The whole attempt budget is spent BEFORE the call starts - see dispatchRules.js. This
+      // covers retries as well as first attempts: previously only never-attempted calls were
+      // gated, so a call that failed inside the window kept retrying long after it had begun,
+      // burning the pipeline lock on a capture that could no longer be complete anyway.
+      const late = shouldSkipAsLate({ minsLeft, record, lateStartGraceMinutes });
+      if (late) {
         const warnKey = `late|${key}`;
         if (!warnedUnparseable.has(warnKey)) {
           warnedUnparseable.add(warnKey);
           logger.warn(
-            `Skipping ${row.symbol} ${row.fiscalPeriod}: never attempted and already ` +
-              `${Math.abs(minsLeft).toFixed(0)} min past start (grace ${lateStartGraceMinutes} min) - treating as missed.`
+            `Missed ${row.symbol} ${row.fiscalPeriod}: ${late.reason}, and the call started ` +
+              `${late.minsPastStart} min ago. Not going back to it - an attempt has to begin ` +
+              `before the call does.`
           );
           obs.recordOutcome({
             status: 'skipped-late',
@@ -354,7 +358,9 @@ async function main() {
             fiscalPeriod: row.fiscalPeriod,
             earningsDate: row.earningsDate,
             dialinUrl: row.dialinLink,
-            minsPastStart: Number(Math.abs(minsLeft).toFixed(1)),
+            minsPastStart: late.minsPastStart,
+            attempts: late.attempts,
+            reason: late.reason,
           });
         }
         continue;

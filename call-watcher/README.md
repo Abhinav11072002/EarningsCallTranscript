@@ -295,10 +295,26 @@ stop: crash, wedged poll, lost Chrome, or expired portal session.
   indefinitely. Note this only works because the poll loop preserves the existing record when
   re-claiming: deleting it first made `claim()` restart the count at 1 every time, which
   silently disabled the cap and pinned the backoff at 30s — roughly 200 retries instead of 4.
-- `lateStartGraceMinutes` — how far past the scheduled start a call may be **first** attempted
-  (10). Beyond this it is recorded as `skipped-late` rather than started, because joining an
-  hour late still "succeeds" and would otherwise make a total miss look like a capture.
-  Reacquiring a call that *was* started stays allowed for the whole `retryWindowMinutes`.
+- `lateStartGraceMinutes` — how far past the scheduled start an attempt may still **begin**
+  (**0**, i.e. not at all). The whole attempt budget is spent inside the `thresholdMinutes`
+  window before the call; once it has begun, a call we never got into is treated as missed and
+  recorded as `skipped-late`.
+
+  This is stricter than it first looks, and deliberately so. A late join is not a partial
+  success, it is a failure shaped like one: it confirms "started", writes a `Done` line, and
+  files a transcript missing the opening remarks and guidance — the part of an earnings call
+  that matters most — and nothing downstream can tell it apart from a complete transcript. It
+  also costs twice, because the pipeline is single-threaded: a doomed retry of a call that has
+  already begun holds the lock against calls that have not.
+
+  It applies to retries as well as first attempts. It previously gated only calls with no
+  record at all, so a call that failed at minute three of the window went on retrying long
+  after the call had started. See `src/dispatchRules.js`.
+
+  The one exception is a call already being **captured** whose stream drops mid-way.
+  Reacquiring that is not going back to a missed call, it is keeping a running capture alive,
+  and it stays allowed for the whole `reacquireGraceMinutes`. Set a non-zero grace here if you
+  would rather have partial captures than none.
 - `streamConfirmTimeoutMs` / `cdpCommandTimeoutMs` / `shortcutTimeoutMs` — bounds on the three
   steps of the trigger path. These exist because the trigger runs inside the pipeline lock, so
   any unbounded wait there stalls not just its own call but every later one for the rest of the

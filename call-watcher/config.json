@@ -9,7 +9,7 @@
   "streamConfirmTimeoutMs": 8000,
   "cdpCommandTimeoutMs": 10000,
   "shortcutTimeoutMs": 30000,
-  "lateStartGraceMinutes": 10,
+  "lateStartGraceMinutes": 0,
   "reacquireGraceMinutes": 30,
   "absentObservationsBeforeComplete": 2,
   "maxCallTabMinutes": 180,

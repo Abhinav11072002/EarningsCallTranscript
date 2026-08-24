@@ -14,6 +14,7 @@ const path = require('path');
 
 const { parseCountdownToMinutes, minutesUntilCall, rowKey } = require('../src/tableWatcher');
 const { StateStore } = require('../src/stateStore');
+const { shouldSkipAsLate } = require('../src/dispatchRules');
 const { resolveLogPath, pruneOldLogFiles } = require('../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow } = require('../src/extensionTrigger');
 const { createObservability } = require('../src/observability');
@@ -532,6 +533,59 @@ check('stateStore: reviving nothing is a no-op', () => {
   store.markStarted('A|2026Q1|2026-08-24');
   assert.deepStrictEqual(store.resetExhaustedFailures(4), []);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- late calls
+
+// An attempt has to begin before the call does. A late join is not a partial success - it is a
+// failure shaped like one: it confirms "started", logs Done, and files a transcript missing the
+// opening remarks and guidance, which nothing downstream can distinguish from a complete one.
+
+check('dispatchRules: attempts are allowed right up to the scheduled time', () => {
+  for (const minsLeft of [15, 5, 1, 0.5, 0.1]) {
+    assert.strictEqual(shouldSkipAsLate({ minsLeft, record: null }), null, `${minsLeft} min out must be allowed`);
+  }
+});
+
+check('dispatchRules: once the call has started it is gone', () => {
+  const skip = shouldSkipAsLate({ minsLeft: -0.5, record: null });
+  assert.ok(skip, 'a call 30s past its start must not be attempted');
+  assert.strictEqual(skip.attempts, 0);
+  assert.strictEqual(skip.reason, 'never attempted');
+  assert.strictEqual(skip.minsPastStart, 0.5);
+});
+
+check('dispatchRules: a call that failed inside the window is not retried past the start', () => {
+  // This is the case the old rule missed entirely: it only gated calls with NO record, so one
+  // that failed at minute 3 kept retrying well past the start, spending the pipeline lock on a
+  // capture that could no longer be complete - and delaying calls that had not started yet.
+  const record = { status: 'failed', attempts: 2 };
+  assert.strictEqual(shouldSkipAsLate({ minsLeft: 2, record }), null, 'still in the window: retry away');
+  const skip = shouldSkipAsLate({ minsLeft: -1, record });
+  assert.ok(skip, 'past the start: stop retrying');
+  assert.strictEqual(skip.reason, 'attempted 2x without success');
+});
+
+check('dispatchRules: a claimed-but-unfinished call is also not resumed past the start', () => {
+  assert.ok(shouldSkipAsLate({ minsLeft: -2, record: { status: 'claimed', attempts: 1 } }));
+});
+
+check('dispatchRules: a capture already running is never treated as late', () => {
+  // Its stream dropping mid-call is a different problem - reacquiring keeps a capture alive
+  // that is already running, and is governed by reacquireGraceMinutes instead. Treating this
+  // as "late" would abandon the rest of a call we were successfully recording.
+  for (const minsLeft of [-1, -20, -90]) {
+    assert.strictEqual(
+      shouldSkipAsLate({ minsLeft, record: { status: 'started', attempts: 1 } }),
+      null,
+      `a live capture ${Math.abs(minsLeft)} min in must not be dropped`
+    );
+  }
+});
+
+check('dispatchRules: a tolerance can still be configured for anyone who wants one', () => {
+  assert.strictEqual(shouldSkipAsLate({ minsLeft: -3, record: null, lateStartGraceMinutes: 5 }), null);
+  assert.ok(shouldSkipAsLate({ minsLeft: -6, record: null, lateStartGraceMinutes: 5 }));
 });
 
 // ---------------------------------------------------------------- report
