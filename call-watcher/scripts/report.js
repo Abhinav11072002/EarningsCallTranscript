@@ -29,19 +29,24 @@ if (arg) {
 const quiet = { info() {}, warn() {}, error() {} };
 const summary = createObservability(DATA_DIR, quiet).summarize(when);
 
+const report = reconcile(DATA_DIR, when);
+
 console.log('');
-console.log(`Attempts on ${summary.date}: started=${summary.started.length} failed=${summary.failed.length} ` +
+// Counts are per CALL, matching the reconciliation block below. They used to be per attempt
+// here and per call there, so the same day was described by two different numbers.
+console.log(`Calls on ${summary.date}: started=${summary.started.length} failed=${summary.failed.length} ` +
   `skipped-late=${summary.skippedLate.length} recovered-on-retry=${summary.retriedThenStarted.length}`);
 for (const s of summary.started) {
   const late = (s.lateBySec ?? 0) > 60 ? `  (started ${s.lateBySec}s late)` : '';
   console.log(`  OK       ${s.label}${late}`);
 }
-for (const f of summary.failed) console.log(`  FAILED   ${f.at} ${f.label}: ${f.error}`);
+// Detail for failures comes from the reconciliation block below, which covers strictly more
+// (including calls that produced no ledger entry at all) and reports one line per call.
+
 
 console.log('');
-for (const line of formatReconciliation(reconcile(DATA_DIR, when))) console.log(line);
+for (const line of formatReconciliation(report)) console.log(line);
 
-const report = reconcile(DATA_DIR, when);
 if (report.totalSeen === 0) {
   console.log('');
   console.log('No rows were observed for this date - either the watcher did not run, or the');

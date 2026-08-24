@@ -785,13 +785,13 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
           `failed=${summary.failed.length}, skipped-late=${summary.skippedLate.length}, ` +
           `recovered-on-retry=${summary.retriedThenStarted.length}`
       );
-      for (const f of summary.failed) fatalLogger.info(`  FAILED  ${f.at} ${f.label}: ${f.error}`);
-      for (const s of summary.skippedLate) fatalLogger.info(`  MISSED  ${s.at} ${s.label} (${s.minsPastStart} min past start)`);
       const late = summary.started.filter((s) => (s.lateBySec ?? 0) > 60);
       for (const s of late) fatalLogger.info(`  LATE    ${s.label} started ${s.lateBySec}s after the scheduled time`);
-      // The ledger only knows about calls that produced an attempt. This adds the ones that
-      // did not - a row that never got a link, never parsed a time, or reached the window and
-      // left no trace at all. Those are the losses nothing else in the system can report.
+      // The per-call failure lines come from the reconciliation below rather than being printed
+      // here as well. Both blocks were listing the same calls, so every stop printed each
+      // problem twice - and the two disagreed, because this one counted attempts and that one
+      // counts calls. Reconciliation is the wider of the two (it also covers calls that never
+      // produced a ledger entry at all), so it is the one that reports the detail.
       for (const line of formatReconciliation(reconcile(DATA_DIR))) fatalLogger.info(line);
     } catch (err) {
       fatalLogger.warn(`Could not produce the daily summary: ${err.message}`);

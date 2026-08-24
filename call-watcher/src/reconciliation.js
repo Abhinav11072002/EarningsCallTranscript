@@ -158,8 +158,11 @@ function reconcile(dataDir, now = new Date()) {
     if (statuses.has('started')) buckets.recorded.push({ key: label, label });
     else if (statuses.has('skipped-late')) buckets.missedLate.push({ key: label, label });
     else if (statuses.has('failed')) {
-      const last = entries.filter((e) => e.status === 'failed').pop() || {};
-      buckets.failed.push({ key: label, label, error: last.error });
+      // Same shape as the seen-log branch below, so a call reads identically whether or not
+      // its row is still on the table when the report is run.
+      const tries = entries.filter((e) => e.status === 'failed');
+      const last = tries[tries.length - 1] || {};
+      buckets.failed.push({ key: label, label, error: last.error, attempts: tries.length, at: (last.ts || '').slice(11, 19) });
     }
     ledgerOnly.push(label);
   }
@@ -174,8 +177,9 @@ function reconcile(dataDir, now = new Date()) {
     } else if (statuses.has('skipped-late')) {
       buckets.missedLate.push({ key, label, error: (entries.find((e) => e.status === 'skipped-late') || {}).reason });
     } else if (statuses.has('failed')) {
-      const last = entries.filter((e) => e.status === 'failed').pop() || {};
-      buckets.failed.push({ key, label, error: last.error });
+      const tries = entries.filter((e) => e.status === 'failed');
+      const last = tries[tries.length - 1] || {};
+      buckets.failed.push({ key, label, error: last.error, attempts: tries.length, at: (last.ts || '').slice(11, 19) });
     } else if (!row.everHadLink) {
       buckets.noDialinLink.push({ key, label });
     } else if (!row.everParsedTime) {
@@ -217,7 +221,14 @@ function formatReconciliation(report) {
     lines.push(`  UNACCOUNTED  ${r.label} - entered the window with a usable link, but nothing was ever recorded about it`);
   }
   for (const r of report.missedLate) lines.push(`  MISSED-LATE  ${r.label}${r.error ? ` (${r.error})` : ''}`);
-  for (const r of report.failed) lines.push(`  FAILED       ${r.label}: ${r.error || 'no error recorded'}`);
+  for (const r of report.failed) {
+    // The attempt count and the time of the LAST try, rather than one line per attempt: a call
+    // retried four times used to print the same sentence four times, which read as four
+    // separate problems and buried how many calls were actually affected.
+    const tries = r.attempts > 1 ? `, ${r.attempts} attempts` : '';
+    const when = r.at ? `last ${r.at}${tries}` : tries.replace(/^, /, '');
+    lines.push(`  FAILED       ${r.label}${when ? ` (${when})` : ''}: ${r.error || 'no error recorded'}`);
+  }
   for (const r of report.noReadableTime) lines.push(`  NO-TIME      ${r.label} - Transcription Time never parsed`);
   return lines;
 }

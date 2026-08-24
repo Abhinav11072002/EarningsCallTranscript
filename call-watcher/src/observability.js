@@ -143,16 +143,38 @@ function createObservability(dataDir, logger) {
         else if (e.status === 'failed') failed.push({ label, at, error: e.error });
         else if (e.status === 'skipped-late') skippedLate.push({ label, at, minsPastStart: e.minsPastStart });
       }
-      // A symbol can appear as failed then started (a retry that worked) - report the final
-      // state per call so the summary is not double-counting the same call.
+      // Collapsed to one entry per CALL, not one per attempt.
+      //
+      // The ledger is per-attempt by design - that is what makes a retry sequence auditable.
+      // But a call that was retried four times produced four identical failure lines, so a
+      // routine Ctrl+C printed the same sentence four times and read as four separate
+      // problems. It also disagreed with the reconciliation block printed directly beneath it,
+      // which counts calls: one said failed=4, the other failed=1, about the same day.
+      //
+      // The last attempt wins, because that is the outcome that stands; the count comes along
+      // so the retries are still visible without repeating them.
+      const collapse = (entries) => {
+        const byLabel = new Map();
+        for (const entry of entries) {
+          const previous = byLabel.get(entry.label);
+          byLabel.set(entry.label, { ...entry, attempts: (previous ? previous.attempts : 0) + 1 });
+        }
+        return [...byLabel.values()];
+      };
+
+      // A call can appear as failed and then started (a retry that worked). Reporting it in
+      // both places would double-count the same call, so a success outranks its own failures.
       const startedLabels = new Set(started.map((s) => s.label));
+      const failedCalls = collapse(failed).filter((f) => !startedLabels.has(f.label));
       return {
         date: dayStamp(now),
+        // Raw ledger lines, so "total" still means "entries written today" - the attempts are
+        // not lost, they are just no longer the unit the summary reports in.
         total: lines.length,
-        started,
-        failed: failed.filter((f) => !startedLabels.has(f.label)),
-        retriedThenStarted: failed.filter((f) => startedLabels.has(f.label)).map((f) => f.label),
-        skippedLate,
+        started: collapse(started),
+        failed: failedCalls,
+        retriedThenStarted: [...new Set(failed.filter((f) => startedLabels.has(f.label)).map((f) => f.label))],
+        skippedLate: collapse(skippedLate),
       };
     },
   };

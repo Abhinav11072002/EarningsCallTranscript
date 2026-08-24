@@ -19,7 +19,7 @@ const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('.
 const { resolveLogPath, pruneOldLogFiles } = require('../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow } = require('../src/extensionTrigger');
 const { createObservability } = require('../src/observability');
-const { SeenLog, reconcile } = require('../src/reconciliation');
+const { SeenLog, reconcile, formatReconciliation } = require('../src/reconciliation');
 const { blindReason } = require('../src/supervisorRules');
 const { validateConfig } = require('../src/validateConfig');
 const { acquireInstanceLock, releaseInstanceLock, refreshInstanceLock, lockPathFor } = require('../src/instanceLock');
@@ -1162,6 +1162,91 @@ check('instanceLock: a lock from an older build without refreshedAt still expire
   const result = acquireInstanceLock(dir, { pid: process.pid + 1, staleAfterMs: 120000 });
   assert.ok(result.ok);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- one line per call
+
+// The ledger is per-ATTEMPT, which is what makes a retry sequence auditable. Reports are per
+// CALL. A call retried four times printed the same sentence four times on every Ctrl+C, which
+// read as four separate problems - and the summary said failed=4 while the reconciliation
+// block printed directly beneath it said failed=1, about the same day.
+
+check('observability: a call retried four times is one failure, with the count kept', () => {
+  withTempObs((obs) => {
+    for (let i = 1; i <= 4; i++) {
+      obs.recordOutcome({ status: 'failed', symbol: 'NSSC', fiscalPeriod: '2026Q4', error: `try ${i}`, attempts: i });
+    }
+    const s = obs.summarize();
+    assert.strictEqual(s.failed.length, 1, 'four attempts on one call is one failed call');
+    assert.strictEqual(s.failed[0].attempts, 4, 'the retries stay visible without repeating');
+    assert.strictEqual(s.failed[0].error, 'try 4', 'the last attempt is the outcome that stands');
+    // The raw ledger is untouched: per-attempt detail is still on disk for a post-mortem.
+    assert.strictEqual(s.total, 4);
+  });
+});
+
+check('observability: repeated successes and misses collapse the same way', () => {
+  withTempObs((obs) => {
+    // A reacquired call can legitimately start more than once.
+    obs.recordOutcome({ status: 'started', symbol: 'AAPL', fiscalPeriod: '2026Q2' });
+    obs.recordOutcome({ status: 'started', symbol: 'AAPL', fiscalPeriod: '2026Q2' });
+    obs.recordOutcome({ status: 'skipped-late', symbol: 'TSLA', fiscalPeriod: '2026Q2', minsPastStart: 3 });
+    obs.recordOutcome({ status: 'skipped-late', symbol: 'TSLA', fiscalPeriod: '2026Q2', minsPastStart: 9 });
+    const s = obs.summarize();
+    assert.strictEqual(s.started.length, 1);
+    assert.strictEqual(s.started[0].attempts, 2);
+    assert.strictEqual(s.skippedLate.length, 1);
+    assert.strictEqual(s.skippedLate[0].minsPastStart, 9, 'the latest reading wins');
+  });
+});
+
+check('observability: a recovered call is counted once, and not as a failure', () => {
+  withTempObs((obs) => {
+    obs.recordOutcome({ status: 'failed', symbol: 'X', fiscalPeriod: '2026Q1', error: 'first' });
+    obs.recordOutcome({ status: 'failed', symbol: 'X', fiscalPeriod: '2026Q1', error: 'second' });
+    obs.recordOutcome({ status: 'started', symbol: 'X', fiscalPeriod: '2026Q1' });
+    const s = obs.summarize();
+    assert.strictEqual(s.failed.length, 0);
+    assert.deepStrictEqual(s.retriedThenStarted, ['X 2026Q1'], 'listed once, not once per failed attempt');
+  });
+});
+
+check('reconciliation: a retried failure prints as one line carrying its attempt count', () => {
+  withDay((dir, quiet) => {
+    const seen = new SeenLog(dir, quiet);
+    seen.observe({
+      key: 'NSSC|2026Q4|2026-08-24', symbol: 'NSSC', fiscalPeriod: '2026Q4',
+      earningsDate: '2026-08-24', hasLink: true, timeParsed: true, insideWindow: true,
+    });
+    seen.flush();
+    const obs = createObservability(dir, quiet);
+    for (let i = 1; i <= 4; i++) {
+      obs.recordOutcome({ status: 'failed', symbol: 'NSSC', fiscalPeriod: '2026Q4', error: 'wrong page' });
+    }
+
+    const r = reconcile(dir);
+    assert.strictEqual(r.failed.length, 1);
+    assert.strictEqual(r.failed[0].attempts, 4);
+
+    const printed = formatReconciliation(r).filter((l) => l.includes('NSSC'));
+    assert.strictEqual(printed.length, 1, 'exactly one line for the call, not one per attempt');
+    assert.match(printed[0], /4 attempts/);
+  });
+});
+
+check('reconciliation: a call whose row already left the table reports identically', () => {
+  // NSSC's own case: its row was gone from the portal by the time the report was run, so it is
+  // known only from the ledger. That path must not print a thinner line than the other one.
+  withDay((dir, quiet) => {
+    const obs = createObservability(dir, quiet);
+    for (let i = 1; i <= 3; i++) {
+      obs.recordOutcome({ status: 'failed', symbol: 'GONE', fiscalPeriod: '2026Q4', error: 'wrong page' });
+    }
+    const r = reconcile(dir);
+    assert.strictEqual(r.failed.length, 1);
+    assert.strictEqual(r.failed[0].attempts, 3, 'the ledger-only path must carry the count too');
+    assert.match(formatReconciliation(r).find((l) => l.includes('GONE')), /3 attempts/);
+  });
 });
 
 // ---------------------------------------------------------------- report
