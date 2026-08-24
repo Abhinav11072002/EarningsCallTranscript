@@ -13,7 +13,8 @@
     "test:resolver": "node scripts/test-webcast-resolver.js",
     "capture:registration": "node scripts/capture-registration-fixture.js",
     "test:unit": "node scripts/test-unit.js",
-    "test": "node scripts/test-unit.js && node scripts/test-form-filler.js && node scripts/test-webcast-resolver.js"
+    "test": "node scripts/test-unit.js && node scripts/test-form-filler.js && node scripts/test-webcast-resolver.js && node scripts/test-join-flow.js",
+    "test:join": "node scripts/test-join-flow.js"
   },
   "dependencies": {
     "playwright-core": "^1.47.2"

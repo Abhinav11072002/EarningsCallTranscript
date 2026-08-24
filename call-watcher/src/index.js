@@ -6,6 +6,7 @@ const { extractRows, minutesUntilCall, rowKey } = require('./tableWatcher');
 const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
+const { advanceJoinFlow } = require('./joinFlow');
 const { triggerExtension, getActiveStreams, streamMatchesRow, splitFiscalPeriod } = require('./extensionTrigger');
 const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
 const { resolveLogPath, pruneOldLogFiles } = require('./logRotation');
@@ -134,8 +135,16 @@ function processRow(context, portalPage, row, key, store, logger, obs, callTabs,
         year,
         period,
       });
+      // Some providers gate the call on a choice of client rather than a form (Zoom's lobby
+      // offers only "Join from Zoom Workplace app" and "Join from browser"). That has to be
+      // resolved BEFORE the form filler runs, because the form we need - Zoom's "Your Name" -
+      // only exists on the far side of it.
+      await advanceJoinFlow(page, logger);
       resolvedUrl = page.url();
       const registration = await fillRegistrationForm(page, config.dummyIdentity, logger);
+      // ...and again afterwards: a registration step can hand back a second client choice, and
+      // Zoom's web client re-renders into the meeting only once the name form is submitted.
+      await advanceJoinFlow(page, logger);
       if (registration.pending) {
         const detail = registration.error ? `: ${registration.error}` : '';
         throw new Error(`Registration gate still appears active after filling and submission attempts${detail}`);

@@ -367,6 +367,20 @@ instead of accidentally pushing a test setting.
   causing a different real call to resolve to a PDF earnings presentation instead of its
   webcast - only add a domain once it's confirmed to host webcast players specifically, not
   just "some Q4/media-server/etc.-family domain."
+- `joinFlow.js` handles gates that are a choice of CLIENT rather than a form. Zoom's lobby is
+  the reference case: `zoom.us/j/<id>` shows "Join from Zoom Workplace app" and "Join from
+  browser" over no input fields at all, so `formFiller.js` correctly reported no registration
+  gate - and the pipeline recorded the lobby. Two rules matter here. First, the native-app
+  option must never be clicked: it fires a `zoommtg://` handler whose OS dialog takes the
+  foreground, and the foreground is what the extension keystroke needs seconds later, so
+  clicking it breaks the step after it as well as its own. `NATIVE_APP_PATTERN` is checked in
+  both `joinFlow.js` and `formFiller.js` for that reason - `formFiller`'s CTA scoring matches
+  the bare word "join", which that button contains. Second, the page's own browser link is
+  preferred over `zoomWebClientUrl()`'s constructed `app.zoom.us/wc/<id>/join` address, because
+  Zoom's link carries state we cannot always reproduce; the constructed URL is the fallback for
+  when the link is absent. A new provider with different wording needs an entry in
+  `BROWSER_ENTRY_PATTERN`, and will otherwise surface as a refused capture rather than a
+  wrong one.
 - `formFiller.js` matches common field naming/proximity patterns and falls back to a
   button-only click flow (for account-based gates like Q4); an unusual registration form may
   still need a new entry in `FIELD_PATTERNS` or `CTA_BUTTON_PATTERN`.

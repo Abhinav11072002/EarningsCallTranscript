@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- A real registration gate sitting next to a native-app CTA. The form must be filled and
+     submitted; the app button must be left alone even though "Open in app" matches the generic
+     CTA pattern on the word "open"/"app". -->
+<html><head><title>Register - Q2 2026 Earnings Call</title></head>
+<body>
+  <h1>Register to attend</h1>
+  <p><button id="native" type="button" onclick="window.__nativeClicked = true;">Open in app</button></p>
+  <form id="registration">
+    <label for="first">First name</label><input id="first" name="first_name" data-expect="firstName">
+    <label for="last">Last name</label><input id="last" name="last_name" data-expect="lastName">
+    <label for="email">Email address</label><input id="email" name="email_address" type="email" data-expect="email">
+    <button type="submit">Register</button>
+  </form>
+  <p id="result" hidden>Registration complete</p>
+  <script>
+    document.getElementById('registration').addEventListener('submit', function (e) {
+      e.preventDefault();
+      document.getElementById('registration').hidden = true;
+      document.getElementById('result').hidden = false;
+    });
+  </script>
+</body></html>

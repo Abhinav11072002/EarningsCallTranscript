@@ -17,6 +17,12 @@ const { StateStore } = require('../src/stateStore');
 const { resolveLogPath, pruneOldLogFiles } = require('../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow } = require('../src/extensionTrigger');
 const { createObservability } = require('../src/observability');
+const {
+  zoomWebClientUrl,
+  NATIVE_APP_PATTERN,
+  BROWSER_ENTRY_PATTERN,
+  PRE_JOIN_TEXT_PATTERN,
+} = require('../src/joinFlow');
 
 let passed = 0;
 const failures = [];
@@ -377,6 +383,61 @@ check('observability: a corrupt ledger line is skipped, not fatal', () => {
     assert.strictEqual(s.started.length, 1);
     assert.strictEqual(s.total, 2, 'total counts raw lines, including the unparseable one');
   });
+});
+
+// ---------------------------------------------------------------- join flow
+
+// NSCIF 2026Q2 (2026-08-24) recorded 20 minutes of a Zoom LOBBY page: two buttons, no fields,
+// so the form filler saw no gate and the pipeline started capture where it stood. These cover
+// the three decisions that failure turned on.
+
+check('joinFlow: the app button that broke the call is now unclickable', () => {
+  // This is the regression. formFiller scores a button on the bare word "join", so
+  // "Join from Zoom Workplace app" was a valid CTA - and clicking it raises an OS dialog that
+  // takes the foreground the extension keystroke needs moments later.
+  assert.ok(NATIVE_APP_PATTERN.test('Join from Zoom Workplace app'));
+  assert.ok(/join/i.test('Join from Zoom Workplace app'), 'sanity: it does match the CTA word');
+  for (const text of ['Launch Meeting', 'Download Now', 'Open Zoom', 'Install the app', 'Join from the app']) {
+    assert.ok(NATIVE_APP_PATTERN.test(text), `should be blocked: ${text}`);
+  }
+});
+
+check('joinFlow: the browser option is not mistaken for the app option', () => {
+  for (const text of ['Join from browser', 'Join from your browser', 'Continue in browser', 'Use web client']) {
+    assert.ok(BROWSER_ENTRY_PATTERN.test(text), `should be an entry CTA: ${text}`);
+    assert.ok(!NATIVE_APP_PATTERN.test(text), `must not be blocked as native: ${text}`);
+  }
+  // Ordinary CTAs must not be dragged into either bucket.
+  for (const text of ['Join', 'Register for webinar', 'Submit', 'Listen to the webcast', 'Enter event']) {
+    assert.ok(!NATIVE_APP_PATTERN.test(text), `must stay clickable: ${text}`);
+    assert.ok(!BROWSER_ENTRY_PATTERN.test(text), `not a browser-entry CTA: ${text}`);
+  }
+});
+
+check('joinFlow: zoom lobby URLs map to the web client, others map to nothing', () => {
+  assert.strictEqual(
+    zoomWebClientUrl('https://us02web.zoom.us/j/83171321596?pwd=qpoCCe0T8xBEsZvO4Tn5bwnQk33BxL.1#success'),
+    'https://app.zoom.us/wc/83171321596/join?pwd=qpoCCe0T8xBEsZvO4Tn5bwnQk33BxL.1'
+  );
+  assert.strictEqual(zoomWebClientUrl('https://zoom.us/w/98765432100'), 'https://app.zoom.us/wc/98765432100/join');
+  // Already on the web client: returning a URL here would make advanceJoinFlow loop.
+  assert.strictEqual(zoomWebClientUrl('https://app.zoom.us/wc/83171321596/join?pwd=x'), null);
+  // Not Zoom, or not a join path - never guess a URL shape.
+  assert.strictEqual(zoomWebClientUrl('https://notzoom.us/j/83171321596'), null);
+  assert.strictEqual(zoomWebClientUrl('https://us02web.zoom.us/rec/play/abc'), null);
+  assert.strictEqual(zoomWebClientUrl('https://edge.media-server.com/mmc/p/abc'), null);
+  assert.strictEqual(zoomWebClientUrl('not a url'), null);
+});
+
+check('joinFlow: pre-join wording is recognised from page text alone', () => {
+  // What the relevance guard keys on when the interstitial has no real <button>.
+  for (const text of ['Join from browser', 'Enter Meeting Info', 'Launch Meeting', "Don't have the Zoom Workplace app installed?"]) {
+    assert.ok(PRE_JOIN_TEXT_PATTERN.test(text), `should read as pre-join: ${text}`);
+  }
+  // An in-call page must not trip it, or every Zoom call would be refused.
+  for (const text of ['Mute Stop Video Participants Chat', 'Waiting for the host to start this meeting']) {
+    assert.ok(!PRE_JOIN_TEXT_PATTERN.test(text), `must not read as pre-join: ${text}`);
+  }
 });
 
 // ---------------------------------------------------------------- report

@@ -1,3 +1,5 @@
+const { NATIVE_APP_PATTERN } = require('./joinFlow');
+
 const FIELD_PATTERNS = [
   { key: 'firstName', regex: /first\s*name|fname|given\s*name/i },
   { key: 'lastName', regex: /last\s*name|lname|surname|family\s*name/i },
@@ -146,6 +148,8 @@ function isOffscreen(handle) {
     .catch(() => false);
 }
 
+const CLICK_TIMEOUT_MS = 5000;
+
 const CTA_BUTTON_PATTERN = /register|submit|enter|join|continue|watch now|listen now|access|attend/i;
 const REGISTRATION_BUTTON_PATTERN = /register|registration|sign\s*in|log\s*in|account|continue\s+registration|continue\s+without|guest|join\s+(the\s+)?(webinar|conference|event)|attend\s+(the\s+)?event/i;
 
@@ -200,8 +204,11 @@ async function hasNonFurnitureRegistrationButton(frame) {
   return false;
 }
 
-async function fillVisibleFields(frame, identity, logger) {
-  const targets = await collectFillableFields(frame, identity);
+// allowFurnitureFallback must be threaded through: fillRegistrationForm has always passed it
+// as a 4th argument, but this function only declared three, so collectFillableFields received
+// `undefined` and the footer-gate fallback it guards could never run at all.
+async function fillVisibleFields(frame, identity, logger, allowFurnitureFallback = false) {
+  const targets = await collectFillableFields(frame, identity, allowFurnitureFallback);
   let filledCount = 0;
   for (const { el, tag, description, key } of targets) {
     try {
@@ -265,6 +272,10 @@ async function clickFirstMatchingButton(frame, logger, allowSubmitFallback = fal
     // pattern and would navigate away from the player; a footer "Subscribe" would submit a
     // newsletter form instead of the gate.
     if (IRRELEVANT_BUTTON_PATTERN.test(text)) continue;
+    // "Join from Zoom Workplace app" matches the CTA pattern on the bare word "join", and
+    // clicking it fires a zoommtg:// handler whose OS dialog steals the foreground - which is
+    // exactly what the extension keystroke needs moments later. See joinFlow.js.
+    if (NATIVE_APP_PATTERN.test(text)) continue;
     if (await isFurniture(btn)) continue;
     const score = /continue\s+without|guest/i.test(text) ? 6 : /register|registration/i.test(text) ? 5 : /submit|continue|join|enter|watch now|listen now|access|attend/i.test(text) ? 4 : type === 'submit' ? 2 : 0;
     if (!score || (registrationOnly && !REGISTRATION_BUTTON_PATTERN.test(text))) continue;
@@ -273,8 +284,14 @@ async function clickFirstMatchingButton(frame, logger, allowSubmitFallback = fal
   }
   candidates.sort((a, b) => b.score - a.score);
   for (const { btn, text } of candidates) {
+    // Bounded deliberately. Playwright's default click timeout is 30s, and it spends that
+    // whole budget retrying against a button that is merely disabled - which is the normal
+    // state of Zoom's "Join" until a name has been entered. Measured: one such button stalled
+    // the pipeline for 30s, and this runs under the pipeline lock, so every later call in the
+    // window waits behind it. 5s is generous for a button that is going to become enabled at
+    // all (debounced validation), and cheap when it is not.
     const clicked = await btn
-      .click()
+      .click({ timeout: CLICK_TIMEOUT_MS })
       .then(() => true)
       .catch((err) => {
         logger.warn(`Failed clicking button "${text}": ${err.message}`);
@@ -388,6 +405,11 @@ async function fillRegistrationForm(page, identity, logger) {
     await page.waitForTimeout(800);
   }
   if (!foundAny) logger.info('No visible form fields or registration button found (probably no registration gate).');
+  // This case previously logged NOTHING: foundAny suppressed the message above, and having
+  // acted on nothing produced no message of its own. That is precisely what a Zoom lobby looks
+  // like - buttons present, none of them registration-shaped - so the most informative line
+  // available about the page was the one line never written.
+  else if (!lastAction) logger.info('Controls present but none looked like a registration step; nothing filled or clicked.');
   // An error message outranks a success message (some pages show both, e.g. "registered" plus
   // "this email is not accepted"), so the error is checked first and wins.
   const error = await findRegistrationError(page);

@@ -1,6 +1,7 @@
 const { execFile } = require('child_process');
 const path = require('path');
 const http = require('http');
+const { describeJoinBlocker } = require('./joinFlow');
 
 const SEND_SHORTCUT_SCRIPT = path.join(__dirname, '..', 'scripts', 'send-shortcut.ps1');
 
@@ -287,6 +288,19 @@ async function assertPageLooksRelevant(page, row, logger, config) {
 
   if (REPLAY_TITLE_PATTERN.test(probe.title)) {
     throw new Error(`Refusing to record: page looks like a replay/archive, not the live call ("${probe.title}")`);
+  }
+
+  // A pre-join screen is disqualifying on its own, whatever else the page says. This is the
+  // check that would have caught NSCIF 2026Q2: its lobby page satisfied the weakest tier below
+  // ("a player element plus 2026" - Zoom's own copyright line supplied the year), so twenty
+  // minutes were recorded from a page whose visible content was a "Join from browser" button.
+  // Unlike the identity tiers, this is not about naming the right company: it is the difference
+  // between being in the call and standing outside it.
+  const blocker = await describeJoinBlocker(page).catch(() => null);
+  if (blocker) {
+    throw new Error(
+      `Refusing to record: not inside the call yet - ${blocker} (title "${probe.title}", url ${probe.url})`
+    );
   }
 
   // The year ALONE is far too weak - almost any page mentions the current year (the admin portal

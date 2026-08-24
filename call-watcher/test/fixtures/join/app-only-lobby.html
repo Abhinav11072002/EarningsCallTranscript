@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- The dangerous variant: the browser option is absent, so the ONLY way forward looks like the
+     native app. Nothing here may be clicked - firing the protocol handler raises an OS dialog
+     that steals the foreground the extension keystroke needs. The correct behaviour is to click
+     nothing and let the relevance guard refuse the capture. -->
+<html><head><title>Launch Meeting - Zoom</title></head>
+<body>
+  <h1>Launch Meeting</h1>
+  <p><button id="native" type="button" onclick="window.__nativeClicked = true;">Join from Zoom Workplace app</button></p>
+  <p><button type="button" onclick="window.__nativeClicked = true;">Download Now</button></p>
+  <footer>&copy; 2026 Zoom Communications, Inc.</footer>
+</body></html>

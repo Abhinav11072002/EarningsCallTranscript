@@ -1,0 +1,46 @@
+<!doctype html>
+<!-- Replica of app.zoom.us/wc/<id>/join: the second screen, reached only after "Join from
+     browser". One "Your Name" field, a Join button that stays disabled until it is filled, and
+     media controls that must not be mistaken for a CTA. Submitting swaps in the in-meeting
+     view, which is what advanceJoinFlow's second pass and the relevance guard must accept. -->
+<html><head><title>Zoom Meeting</title></head>
+<body>
+  <div id="prejoin">
+    <a href="/j/83171321596">Back</a>
+    <div>
+      <button type="button">Mute</button>
+      <button type="button">Stop Video</button>
+      <button type="button">Backgrounds</button>
+    </div>
+    <h2>Enter Meeting Info</h2>
+    <form id="joinform">
+      <label for="input-for-name">Your Name</label>
+      <input id="input-for-name" name="displayName" data-expect="fullName" autocomplete="name">
+      <label><input id="remember" type="checkbox"> Remember my name for future meetings</label>
+      <button id="joinbtn" type="submit" disabled>Join</button>
+    </form>
+    <p>By clicking "Join", you agree to our <a href="/tos">Terms of Service</a> and <a href="/privacy">Privacy Statement</a>.</p>
+  </div>
+  <div id="inmeeting" hidden>
+    <h2>Q2 2026 Earnings Call</h2>
+    <audio controls></audio>
+    <button type="button">Mute</button>
+    <button type="button">Leave</button>
+  </div>
+  <script>
+    // Not `var name` - at global scope that is window.name, a built-in String, so assigning
+    // an element to it coerces to "[object HTMLInputElement]" and the next line throws,
+    // silently detaching every handler below it. (This fixture had that bug; it looked exactly
+    // like a product failure.)
+    var nameInput = document.getElementById('input-for-name');
+    var btn = document.getElementById('joinbtn');
+    nameInput.addEventListener('input', function () { btn.disabled = !nameInput.value.trim(); });
+    document.getElementById('joinform').addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (!nameInput.value.trim()) return;
+      document.getElementById('prejoin').hidden = true;
+      document.getElementById('inmeeting').hidden = false;
+      document.title = 'Zoom Meeting';
+    });
+  </script>
+</body></html>

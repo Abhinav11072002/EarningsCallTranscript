@@ -1,0 +1,17 @@
+<!doctype html>
+<!-- Replica of the page the watcher actually landed on for NSCIF 2026Q2 (2026-08-24):
+     us02web.zoom.us/j/83171321596 - a "Join meeting" heading over two buttons and no input
+     fields anywhere. This is the shape that read as "no registration gate" and got recorded.
+     The native-app button records a click instead of firing a protocol handler, so the test
+     can assert it was never pressed. -->
+<html><head><title>Join from Zoom Workplace app - Zoom</title></head>
+<body>
+  <header><a href="/support">Support</a> <a href="/lang">English</a></header>
+  <h1>Join meeting</h1>
+  <p><a id="native" href="#" onclick="window.__nativeClicked = true; return false;">Join from Zoom Workplace app</a></p>
+  <p><a id="browser" href="/wc/83171321596/join">Join from browser</a></p>
+  <p>Don't have the Zoom Workplace app installed? <a href="#" onclick="window.__nativeClicked = true; return false;">Download Now</a></p>
+  <p>By joining a meeting, you agree to our <a href="/tos">Terms of Service</a> and <a href="/privacy">Privacy Statement</a>.</p>
+  <!-- Zoom's own copyright line is where the relevance guard's weakest tier found "2026". -->
+  <footer>&copy; 2026 Zoom Communications, Inc. All rights reserved.</footer>
+</body></html>
