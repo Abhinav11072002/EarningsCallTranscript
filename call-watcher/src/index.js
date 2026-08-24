@@ -329,8 +329,9 @@ async function main() {
     logger.error(
       `Another call-watcher is already running (pid ${lock.holder.pid}, started ${lock.holder.startedAt}). ` +
         'Two watchers on the same Chrome and data directory overwrite one another and can ' +
-        'record the same call twice. Stop that one first, or delete data/watcher.lock if you are ' +
-        'certain it is gone.'
+        'record the same call twice. Run "npm run stop" to stop it - that uses this lock file, ' +
+        'so it finds the right process however it was launched. If you are certain it is gone, ' +
+        'delete data/watcher.lock.'
     );
     process.exit(EXIT_REFUSED_TO_START);
   }

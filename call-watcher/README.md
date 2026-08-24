@@ -209,6 +209,14 @@ if it is running but blind - a stale heartbeat, a disconnected Chrome, an expire
 session, a table with no readable times. Restarts are rate-limited: five in ten minutes and it
 stops and says so, because a process that cannot start is a problem to fix, not to paper over.
 
+Use `npm run stop` rather than hunting for the process. Finding it by hand is genuinely
+error-prone and was got wrong twice during development: the command line depends on how it was
+launched (`npm start` gives `node  src/index.js`, running it directly gives
+`"C:\Program Files\nodejs\node.exe" src/index.js`), so a filter written for one matches
+nothing for the other and reports success while the watcher keeps running. A looser filter is
+worse - `*src/index.js*` also matches unrelated Node tools. `npm run stop` reads the lock file,
+which the watcher writes itself, and confirms the process is actually gone before saying so.
+
 Only one watcher may run at a time (`data/watcher.lock`). Two sharing a Chrome and a data
 directory overwrite each other - `processed.json` is rewritten whole from memory, so
 last-write-wins can erase a claim and dispatch the same call twice. The holder refreshes the lock every poll,
@@ -224,6 +232,7 @@ rule covers the lock; use `npm run report` for the summary.
 
 ```powershell
 npm run supervise        # like npm start, but restarts on death OR on a blind heartbeat
+npm run stop             # stop the running watcher, whatever it was launched as
 npm run report           # "did we get everything today?" - safe to run while it is watching
 npm test                 # everything: unit, then the four browser suites
 npm run test:unit        # pure logic - no browser needed, ~1s

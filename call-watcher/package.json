@@ -17,7 +17,8 @@
     "test:join": "node scripts/test-join-flow.js",
     "test:gauntlet": "node scripts/test-gauntlet.js",
     "report": "node scripts/report.js",
-    "supervise": "node scripts/supervisor.js"
+    "supervise": "node scripts/supervisor.js",
+    "stop": "node scripts/stop.js"
   },
   "dependencies": {
     "playwright-core": "^1.47.2"
