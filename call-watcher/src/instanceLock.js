@@ -28,7 +28,10 @@ const path = require('path');
 // So the holder refreshes the lock every poll, and a lock not refreshed within this window is
 // treated as abandoned whatever its pid says. Generous relative to the poll interval, because
 // taking a lock away from a live watcher is far worse than waiting an extra minute.
-const DEFAULT_STALE_LOCK_MS = 120000;
+// Six polls at the default 20s interval. Short enough that a hard-killed watcher's lock is
+// never in the way for long, generous enough that a watcher busy preparing a batch of calls is
+// never mistaken for a dead one.
+const DEFAULT_STALE_LOCK_MS = 60000;
 
 function lockPathFor(dataDir) {
   return path.join(dataDir, 'watcher.lock');

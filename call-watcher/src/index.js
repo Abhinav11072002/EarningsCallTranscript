@@ -346,6 +346,14 @@ async function main() {
     process.exit(EXIT_REFUSED_TO_START);
   }
   if (lock.warning) logger.warn(`Instance lock: ${lock.warning}`);
+  // Released from an exit hook rather than only from the signal handlers, so it covers every
+  // way this process can end on its own: Ctrl+C, a fatal error exiting non-zero, a validation
+  // refusal, or simply running off the end. Node runs 'exit' listeners for all of those, and
+  // fs.unlinkSync is synchronous, which is the only kind of work allowed at that point.
+  //
+  // It cannot cover a hard kill - no process gets to run code when the OS terminates it - and
+  // that is precisely the gap the staleness check in instanceLock.js exists to close.
+  process.on('exit', () => releaseInstanceLock(DATA_DIR));
   if (lock.takeover) {
     // Routine, not a problem: on Windows a watcher stopped by anything other than Ctrl+C never
     // runs its signal handlers, so it cannot release its own lock. Logged at info level because
@@ -788,7 +796,9 @@ process.on('uncaughtException', (err) => {
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     fatalLogger.info(`Received ${signal}; shutting down. Tabs already opened for in-flight calls are left open.`);
-    releaseInstanceLock(DATA_DIR);
+    // The lock is released by the exit hook registered in main(), which covers this path and
+    // every other one. Releasing it here too would work, but having a single place responsible
+    // is what stops the two drifting apart later.
     // Print the day's tally on the way out so stopping the watcher leaves a checkable record
     // rather than an impression. Read back from the ledger, so it is correct across restarts.
     try {

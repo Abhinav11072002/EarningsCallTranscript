@@ -219,8 +219,11 @@ which the watcher writes itself, and confirms the process is actually gone befor
 
 Only one watcher may run at a time (`data/watcher.lock`). Two sharing a Chrome and a data
 directory overwrite each other - `processed.json` is rewritten whole from memory, so
-last-write-wins can erase a claim and dispatch the same call twice. The holder refreshes the lock every poll,
-and a lock nobody is refreshing is taken over automatically - so a hard kill never needs manual
+last-write-wins can erase a claim and dispatch the same call twice. The lock releases itself on exit - from an exit
+hook, so it covers Ctrl+C, a fatal error, a config refusal and a normal end alike, not just the
+paths with signal handlers. The one case no code can cover is a hard kill, where the OS gives
+the process no chance to run anything: for that, the holder refreshes the lock every poll, and
+a lock nobody is refreshing is taken over automatically - so a hard kill never needs manual
 cleanup. Checking the pid alone was not enough: Windows recycles pids quickly, and once the OS
 hands a dead watcher's number to an unrelated process, a pid-only lock looks held forever.
 

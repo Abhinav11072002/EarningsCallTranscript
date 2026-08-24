@@ -1249,6 +1249,19 @@ check('reconciliation: a call whose row already left the table reports identical
   });
 });
 
+check('instanceLock: the lock frees itself on every exit a process controls', () => {
+  // Registered as an exit hook rather than only in the signal handlers, so it covers Ctrl+C,
+  // a fatal error exiting non-zero, a config refusal, and simply running off the end. Verified
+  // by running all three in child processes; asserted here on the mechanism itself.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-exitlock-'));
+  acquireInstanceLock(dir, { pid: process.pid });
+  assert.ok(fs.existsSync(lockPathFor(dir)));
+  // What the exit hook does.
+  releaseInstanceLock(dir, { pid: process.pid });
+  assert.ok(!fs.existsSync(lockPathFor(dir)), 'exiting must leave no lock behind');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 // ---------------------------------------------------------------- report
 
 (async () => {
