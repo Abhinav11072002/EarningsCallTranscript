@@ -133,6 +133,34 @@ class StateStore {
     return !record.nextAttemptAt || Date.parse(record.nextAttemptAt) <= Date.now();
   }
 
+  // Gives calls that burned through every attempt one more full set, and returns what it
+  // reset so the operator can see it.
+  //
+  // Why a restart is the right trigger: the attempt cap is there to stop a call retrying
+  // forever inside one session, and it should keep doing that. But once the process is
+  // restarted - almost always because something was just fixed or reconfigured - the old
+  // verdict was reached by code that no longer exists. Observed exactly this: NSSC 2026Q4
+  // failed four times against a relevance check that was too strict, the check was corrected
+  // minutes later, and the call still could not be retried because the record said "failed,
+  // attempts=4". The fix was live and unreachable at the same time.
+  //
+  // This cannot turn into an infinite retry loop: index.js still refuses to start a call more
+  // than lateStartGraceMinutes past its scheduled time, so a crash-restart cycle runs out of
+  // eligible calls on its own.
+  resetExhaustedFailures(maxAttempts) {
+    const reset = [];
+    for (const [key, record] of this.records) {
+      if (record.status !== 'failed') continue;
+      if ((record.attempts || 0) < maxAttempts) continue;
+      reset.push({ key, attempts: record.attempts, lastError: record.lastError });
+      record.attempts = 0;
+      delete record.nextAttemptAt;
+      record.updatedAt = new Date().toISOString();
+    }
+    if (reset.length) this._save();
+    return reset;
+  }
+
   remove(key) {
     if (!this.records.delete(key)) return;
     this._save();

@@ -131,9 +131,13 @@ function createObservability(dataDir, logger) {
           continue;
         }
         const label = `${e.symbol} ${e.fiscalPeriod}`;
-        if (e.status === 'started') started.push({ label, lateBySec: e.secondsLateVsScheduled, title: e.pageTitle });
-        else if (e.status === 'failed') failed.push({ label, error: e.error });
-        else if (e.status === 'skipped-late') skippedLate.push({ label, minsPastStart: e.minsPastStart });
+        // The timestamp is carried through so the shutdown summary can show WHEN each outcome
+        // happened. Without it a short run prints the whole day's failures with no indication
+        // they predate it - which reads as though this run just failed that many times.
+        const at = (e.ts || '').slice(11, 19);
+        if (e.status === 'started') started.push({ label, at, lateBySec: e.secondsLateVsScheduled, title: e.pageTitle });
+        else if (e.status === 'failed') failed.push({ label, at, error: e.error });
+        else if (e.status === 'skipped-late') skippedLate.push({ label, at, minsPastStart: e.minsPastStart });
       }
       // A symbol can appear as failed then started (a retry that worked) - report the final
       // state per call so the summary is not double-counting the same call.

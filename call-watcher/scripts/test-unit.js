@@ -483,6 +483,57 @@ check('joinFlow: healthy pre-call waiting is recognised as healthy', () => {
   }
 });
 
+// ---------------------------------------------------------------- restart revival
+
+// The attempt cap should stop a call retrying forever WITHIN a session, and still does. But a
+// restart is almost always an operator acting on a fix, and a verdict reached by code that no
+// longer exists should not outlive it. Observed live: NSSC 2026Q4 failed four times against a
+// too-strict relevance check, the check was corrected minutes later, and the call remained
+// unreachable because its record said failed/attempts=4 - the fix was live and unusable.
+check('stateStore: a restart gives exhausted failures another full set of attempts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-revive-'));
+  const file = path.join(dir, 'processed.json');
+  const store = new StateStore(file);
+
+  store.claim('EXHAUSTED|2026Q1|2026-08-24');
+  for (let i = 0; i < 4; i++) {
+    store.fail('EXHAUSTED|2026Q1|2026-08-24', 'too strict', 1000);
+    if (i < 3) store.claim('EXHAUSTED|2026Q1|2026-08-24');
+  }
+  store.claim('MIDWAY|2026Q1|2026-08-24');
+  store.fail('MIDWAY|2026Q1|2026-08-24', 'one failure', 1000);
+  store.claim('DONE|2026Q1|2026-08-24');
+  store.markStarted('DONE|2026Q1|2026-08-24');
+
+  const exhaustedBefore = store.get('EXHAUSTED|2026Q1|2026-08-24').attempts;
+  assert.ok(exhaustedBefore >= 4, `expected the cap to have been reached, got ${exhaustedBefore}`);
+
+  const revived = store.resetExhaustedFailures(4);
+  assert.deepStrictEqual(revived.map((r) => r.key), ['EXHAUSTED|2026Q1|2026-08-24']);
+  assert.strictEqual(store.get('EXHAUSTED|2026Q1|2026-08-24').attempts, 0);
+  assert.ok(store.retryDue('EXHAUSTED|2026Q1|2026-08-24'), 'the revived call must be retryable now');
+  // The reason is kept: it is what the operator reads to know WHY it had given up.
+  assert.match(store.get('EXHAUSTED|2026Q1|2026-08-24').lastError, /too strict/);
+
+  // A call still inside its budget is untouched - its backoff must not be reset out from under
+  // it - and a call that already recorded must never be resurrected and recorded twice.
+  assert.strictEqual(store.get('MIDWAY|2026Q1|2026-08-24').attempts, 1);
+  assert.strictEqual(store.get('DONE|2026Q1|2026-08-24').status, 'started');
+
+  // Survives the reload, or the next restart would revive it all over again.
+  assert.strictEqual(new StateStore(file).get('EXHAUSTED|2026Q1|2026-08-24').attempts, 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('stateStore: reviving nothing is a no-op', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-revive2-'));
+  const store = new StateStore(path.join(dir, 'processed.json'));
+  store.claim('A|2026Q1|2026-08-24');
+  store.markStarted('A|2026Q1|2026-08-24');
+  assert.deepStrictEqual(store.resetExhaustedFailures(4), []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 // ---------------------------------------------------------------- report
 
 for (const f of failures) console.error(`FAIL ${f}`);

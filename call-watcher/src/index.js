@@ -246,6 +246,12 @@ async function main() {
     logger.info('Preflight: Chrome has --auto-accept-this-tab-capture.');
   }
 
+  // A restart is an explicit decision to try again - see StateStore.resetExhaustedFailures.
+  const revived = store.resetExhaustedFailures(Number(config.maxAttempts ?? 4));
+  for (const r of revived) {
+    logger.info(`Retrying ${r.key} on this restart (it had used all ${r.attempts} attempts): ${r.lastError || 'no error recorded'}`);
+  }
+
   logger.info(`Watching table every ${config.pollIntervalMs}ms, threshold ${config.thresholdMinutes} min`);
 
   let pollCount = 0;
@@ -547,12 +553,13 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     try {
       const summary = createObservability(DATA_DIR, fatalLogger).summarize();
       fatalLogger.info(
-        `Summary for ${summary.date}: started=${summary.started.length}, ` +
+        `Summary for ${summary.date} (the whole day, including earlier runs): ` +
+          `started=${summary.started.length}, ` +
           `failed=${summary.failed.length}, skipped-late=${summary.skippedLate.length}, ` +
           `recovered-on-retry=${summary.retriedThenStarted.length}`
       );
-      for (const f of summary.failed) fatalLogger.info(`  FAILED  ${f.label}: ${f.error}`);
-      for (const s of summary.skippedLate) fatalLogger.info(`  MISSED  ${s.label} (${s.minsPastStart} min past start)`);
+      for (const f of summary.failed) fatalLogger.info(`  FAILED  ${f.at} ${f.label}: ${f.error}`);
+      for (const s of summary.skippedLate) fatalLogger.info(`  MISSED  ${s.at} ${s.label} (${s.minsPastStart} min past start)`);
       const late = summary.started.filter((s) => (s.lateBySec ?? 0) > 60);
       for (const s of late) fatalLogger.info(`  LATE    ${s.label} started ${s.lateBySec}s after the scheduled time`);
     } catch (err) {
