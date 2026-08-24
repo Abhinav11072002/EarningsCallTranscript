@@ -38,5 +38,8 @@
     "on24.com",
     "qcnl.tv",
     "webinar.net"
-  ]
+  ],
+  "maxConcurrentPreparations": 3,
+  "prepareDeadlineMs": 120000,
+  "triggerDeadlineMs": 90000
 }

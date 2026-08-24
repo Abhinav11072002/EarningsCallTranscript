@@ -315,6 +315,26 @@ stop: crash, wedged poll, lost Chrome, or expired portal session.
   Reacquiring that is not going back to a missed call, it is keeping a running capture alive,
   and it stays allowed for the whole `reacquireGraceMinutes`. Set a non-zero grace here if you
   would rather have partial captures than none.
+- `maxConcurrentPreparations` — how many calls may be **prepared** at once (3). Preparation is
+  everything before the extension is triggered: resolving the link, opening the page, walking
+  join screens, filling any form. Each call touches only its own tab, so these overlap safely.
+
+  Triggering does **not** overlap, ever, and cannot be configured to. It brings a tab to the
+  foreground and drives a popup that closes the instant its tab loses focus, so a second
+  trigger — or a tab opened by a preparation — running alongside it captures the wrong tab or
+  kills the popup. Both were observed here. That is why a batch prepares everything first and
+  only then triggers, one call at a time, in order of urgency: by the time the first trigger
+  runs, no preparation is still open to interfere.
+
+  Set it to 1 for a fully serial run. Raising it does not make any individual call faster — it
+  shortens the time to get through a batch, which is what decides whether the last call in a
+  crowded window still gets attempted before it starts.
+- `prepareDeadlineMs` / `triggerDeadlineMs` — per-call ceilings (120s / 90s). These replaced a
+  single 5-minute bound that only covered the trigger. That figure was harmless when a slow
+  call merely delayed the next one; now that an attempt has to finish before its call starts, a
+  call allowed to run for five minutes can push several later calls past their start time and
+  lose them outright. Neither bound is reachable by a healthy call — the trigger's own steps
+  total about 66s worst case, and preparation is a page load plus at most two hops.
 - `streamConfirmTimeoutMs` / `cdpCommandTimeoutMs` / `shortcutTimeoutMs` — bounds on the three
   steps of the trigger path. These exist because the trigger runs inside the pipeline lock, so
   any unbounded wait there stalls not just its own call but every later one for the rest of the

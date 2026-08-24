@@ -15,6 +15,7 @@ const path = require('path');
 const { parseCountdownToMinutes, minutesUntilCall, rowKey } = require('../src/tableWatcher');
 const { StateStore } = require('../src/stateStore');
 const { shouldSkipAsLate } = require('../src/dispatchRules');
+const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow } = require('../src/extensionTrigger');
 const { createObservability } = require('../src/observability');
@@ -36,6 +37,10 @@ function check(name, fn) {
   } catch (err) {
     failures.push(`${name}: ${err.message}`);
   }
+}
+const asyncChecks = [];
+function checkAsync(name, fn) {
+  asyncChecks.push({ name, fn });
 }
 const approx = (got, want, tol = 0.02) => assert.ok(Math.abs(got - want) < tol, `expected ~${want}, got ${got}`);
 
@@ -588,8 +593,197 @@ check('dispatchRules: a tolerance can still be configured for anyone who wants o
   assert.ok(shouldSkipAsLate({ minsLeft: -6, record: null, lateStartGraceMinutes: 5 }));
 });
 
+// ---------------------------------------------------------------- concurrency
+
+// These back the batch pipeline: calls are PREPARED several at a time and then TRIGGERED one
+// at a time. The trigger has to stay exclusive because it brings a tab to the foreground and
+// drives a popup that dies when its tab loses focus.
+
+checkAsync('mapWithConcurrency: never exceeds the width, and keeps input order', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const items = Array.from({ length: 12 }, (_, i) => i);
+  const results = await mapWithConcurrency(items, 3, async (n) => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 5 + (n % 3) * 5));
+    inFlight--;
+    return n * 2;
+  });
+  assert.ok(peak <= 3, `width exceeded: peak ${peak}`);
+  assert.ok(peak > 1, 'nothing actually ran concurrently');
+  // Order matters: the batch pairs results back to rows positionally.
+  assert.deepStrictEqual(results.map((r) => r.value), items.map((n) => n * 2));
+});
+
+checkAsync('mapWithConcurrency: one failing call cannot take the batch down with it', async () => {
+  // The whole point. Before the split, a throw propagated out of the queued pipeline; here a
+  // bad call must cost only itself, because the others are calls in the same 15-minute window.
+  const results = await mapWithConcurrency([1, 2, 3, 4], 2, async (n) => {
+    if (n === 2) throw new Error('provider exploded');
+    return n;
+  });
+  assert.deepStrictEqual(results.map((r) => r.ok), [true, false, true, true]);
+  assert.strictEqual(results[1].error.message, 'provider exploded');
+  assert.deepStrictEqual(results.filter((r) => r.ok).map((r) => r.value), [1, 3, 4]);
+});
+
+checkAsync('mapWithConcurrency: a width larger than the batch is harmless', async () => {
+  const results = await mapWithConcurrency([1, 2], 10, async (n) => n);
+  assert.deepStrictEqual(results.map((r) => r.value), [1, 2]);
+  assert.deepStrictEqual((await mapWithConcurrency([], 3, async () => 1)), []);
+});
+
+checkAsync('Mutex: serializes, and one rejection does not poison the lock', async () => {
+  const mutex = new Mutex();
+  const order = [];
+  let overlapping = 0;
+  const task = (name, ms) =>
+    mutex.run(async () => {
+      overlapping++;
+      assert.strictEqual(overlapping, 1, `${name} overlapped another holder`);
+      await new Promise((r) => setTimeout(r, ms));
+      order.push(name);
+      overlapping--;
+      if (name === 'b') throw new Error('boom');
+    });
+
+  const results = await Promise.allSettled([task('a', 20), task('b', 5), task('c', 1)]);
+  assert.deepStrictEqual(order, ['a', 'b', 'c'], 'must run in submission order');
+  assert.deepStrictEqual(results.map((r) => r.status), ['fulfilled', 'rejected', 'fulfilled']);
+  // The caller of the failing task still sees the real error...
+  assert.strictEqual(results[1].reason.message, 'boom');
+  // ...and the lock is still usable afterwards, which is what matters for the portal tab.
+  assert.strictEqual(await mutex.run(async () => 'still works'), 'still works');
+});
+
+checkAsync('withDeadline: bounds a hang and passes a fast result through', async () => {
+  assert.strictEqual(await withDeadline(Promise.resolve('fast'), 500, 'too slow'), 'fast');
+  await assert.rejects(
+    () => withDeadline(new Promise(() => {}), 30, 'preparation exceeded its limit'),
+    /preparation exceeded its limit/
+  );
+  // The timer must be cleared even on the fast path, or the process would not exit on Ctrl+C.
+  const before = process._getActiveHandles().length;
+  await withDeadline(Promise.resolve(1), 60000, 'unused');
+  assert.ok(process._getActiveHandles().length <= before, 'a timer was left running');
+});
+
+// These exercise the REAL orchestrator the poll loop uses, with the Playwright work stubbed
+// out - so the ordering guarantees are tested rather than assumed. Every symbol in a batch goes
+// through the same two phases in the same order; only how many preparations run beside it
+// differs.
+
+checkAsync('runPreparedBatch: prepares in parallel but never overlaps two triggers', async () => {
+  // The load-bearing rule. Triggering brings a tab to the foreground and drives a popup that
+  // closes the instant its tab loses focus, so two at once means one capture records the wrong
+  // tab - or no tab at all. Verified behaviour in this project, not a theoretical concern.
+  const symbols = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN'];
+  let preparingNow = 0;
+  let peakPreparing = 0;
+  let triggeringNow = 0;
+  const triggerOrder = [];
+
+  await runPreparedBatch(symbols.map((symbol) => ({ symbol })), {
+    width: 3,
+    prepare: async ({ symbol }) => {
+      preparingNow++;
+      peakPreparing = Math.max(peakPreparing, preparingNow);
+      await new Promise((r) => setTimeout(r, 10));
+      preparingNow--;
+      return { symbol, page: `page:${symbol}` };
+    },
+    trigger: async (prepared, { symbol }) => {
+      triggeringNow++;
+      assert.strictEqual(triggeringNow, 1, `two triggers overlapped at ${symbol}`);
+      assert.strictEqual(prepared.symbol, symbol, `a trigger got another row's prepared page`);
+      await new Promise((r) => setTimeout(r, 5));
+      triggerOrder.push(symbol);
+      triggeringNow--;
+    },
+  });
+
+  assert.ok(peakPreparing > 1, 'preparation did not actually run in parallel');
+  assert.ok(peakPreparing <= 3, `preparation exceeded its width: ${peakPreparing}`);
+  // Order is preserved so the most urgent call - the batch arrives sorted by time left - is
+  // triggered first, and so every symbol is accounted for.
+  assert.deepStrictEqual(triggerOrder, symbols);
+});
+
+checkAsync('runPreparedBatch: every symbol in the window is accounted for, failures included', async () => {
+  // "It must follow the exact same steps for each and every symbol" - so a batch must never
+  // silently drop one. Each symbol ends up either triggered or reported, never neither.
+  const symbols = ['A', 'B', 'C', 'D', 'E', 'F'];
+  const triggered = [];
+  const failed = [];
+
+  await runPreparedBatch(symbols.map((symbol) => ({ symbol })), {
+    width: 3,
+    prepare: async ({ symbol }) => {
+      if (symbol === 'B') throw new Error('registration gate still active');
+      if (symbol === 'D') throw new Error('preparation exceeded its limit');
+      return { symbol };
+    },
+    trigger: async (prepared) => {
+      triggered.push(prepared.symbol);
+    },
+    onPrepareFailure: async ({ symbol }, error) => {
+      failed.push(`${symbol}: ${error.message}`);
+    },
+  });
+
+  assert.deepStrictEqual(triggered, ['A', 'C', 'E', 'F']);
+  assert.deepStrictEqual(failed, ['B: registration gate still active', 'D: preparation exceeded its limit']);
+  assert.strictEqual(triggered.length + failed.length, symbols.length, 'a symbol went missing');
+});
+
+checkAsync('runPreparedBatch: a failing trigger does not abandon the calls behind it', async () => {
+  const triggered = [];
+  await assert.doesNotReject(() =>
+    runPreparedBatch([{ symbol: 'A' }, { symbol: 'B' }, { symbol: 'C' }], {
+      width: 2,
+      prepare: async (item) => item,
+      trigger: async ({ symbol }) => {
+        // index.js's trigger callback handles its own errors; this mirrors that contract.
+        try {
+          if (symbol === 'A') throw new Error('popup never opened');
+          triggered.push(symbol);
+        } catch {
+          triggered.push(`${symbol}(failed)`);
+        }
+      },
+    })
+  );
+  assert.deepStrictEqual(triggered, ['A(failed)', 'B', 'C']);
+});
+
+checkAsync('runPreparedBatch: a single call behaves exactly as it always did', async () => {
+  const steps = [];
+  await runPreparedBatch([{ symbol: 'SOLO' }], {
+    width: 3,
+    prepare: async ({ symbol }) => {
+      steps.push(`prepare:${symbol}`);
+      return { symbol };
+    },
+    trigger: async ({ symbol }) => {
+      steps.push(`trigger:${symbol}`);
+    },
+  });
+  assert.deepStrictEqual(steps, ['prepare:SOLO', 'trigger:SOLO']);
+});
+
 // ---------------------------------------------------------------- report
 
-for (const f of failures) console.error(`FAIL ${f}`);
-console.log(`${passed} passed, ${failures.length} failed`);
-process.exit(failures.length ? 1 : 0);
+(async () => {
+  for (const { name, fn } of asyncChecks) {
+    try {
+      await fn();
+      passed++;
+    } catch (err) {
+      failures.push(`${name}: ${err.message}`);
+    }
+  }
+  for (const f of failures) console.error(`FAIL ${f}`);
+  console.log(`${passed} passed, ${failures.length} failed`);
+  process.exit(failures.length ? 1 : 0);
+})();
