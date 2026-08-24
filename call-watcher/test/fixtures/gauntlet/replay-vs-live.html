@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><title>Investor Relations - Events</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <h1>Q2 2026 Earnings Call</h1>
+  <p><a href="#" data-forbidden="true" onclick="return false">Listen to the replay</a></p>
+  <p><a href="#" data-forbidden="true" onclick="return false">Download the archived presentation</a></p>
+  <div id="gate"><button id="live" type="button">Join the live webcast</button></div>
+  <div id="inmeeting" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('live').addEventListener('click',function(){
+      document.getElementById('gate').hidden=true;
+      document.getElementById('inmeeting').hidden=false;});
+  </script>
+</body></html>

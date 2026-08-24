@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><title>Register</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <form id="f">
+    <label for="fn">First name</label><input id="fn" data-expect="firstName">
+    <label for="em">Email address</label><input id="em" type="email" data-expect="email">
+    <label><input id="agree" type="checkbox"> I agree to the terms and privacy policy</label>
+    <button id="go" type="submit" disabled>Register</button>
+  </form>
+  <div id="ok" hidden data-incall="true">Registration complete</div>
+  <script>
+    var agree=document.getElementById('agree'),go=document.getElementById('go');
+    agree.addEventListener('change',function(){go.disabled=!agree.checked;});
+    document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();
+      document.getElementById('f').hidden=true;document.getElementById('ok').hidden=false;});
+  </script>
+</body></html>

@@ -139,12 +139,16 @@ function processRow(context, portalPage, row, key, store, logger, obs, callTabs,
       // offers only "Join from Zoom Workplace app" and "Join from browser"). That has to be
       // resolved BEFORE the form filler runs, because the form we need - Zoom's "Your Name" -
       // only exists on the far side of it.
-      await advanceJoinFlow(page, logger);
+      // Reassigned, not just awaited: an entry link with target=_blank opens the call in its
+      // own tab, and capture is per-tab - continuing with the old handle would record the lobby.
+      page = await advanceJoinFlow(page, logger);
       resolvedUrl = page.url();
       const registration = await fillRegistrationForm(page, config.dummyIdentity, logger);
+      // The form filler may have followed the call into a new tab, same as the join flow.
+      if (registration.page) page = registration.page;
       // ...and again afterwards: a registration step can hand back a second client choice, and
       // Zoom's web client re-renders into the meeting only once the name form is submitted.
-      await advanceJoinFlow(page, logger);
+      page = await advanceJoinFlow(page, logger);
       if (registration.pending) {
         const detail = registration.error ? `: ${registration.error}` : '';
         throw new Error(`Registration gate still appears active after filling and submission attempts${detail}`);
@@ -153,7 +157,7 @@ function processRow(context, portalPage, row, key, store, logger, obs, callTabs,
       // inside the pipeline lock, so any future unbounded wait in here would stall not just
       // this call but every later one for the rest of the day.
       await Promise.race([
-        triggerExtension(context, page, row, config, logger),
+        triggerExtension(context, page, row, config, logger, dialinLink),
         delay(CALL_DEADLINE_MS).then(() => {
           throw new Error(`Trigger exceeded the ${CALL_DEADLINE_MS / 1000}s per-call deadline`);
         }),

@@ -22,6 +22,8 @@ const {
   NATIVE_APP_PATTERN,
   BROWSER_ENTRY_PATTERN,
   PRE_JOIN_TEXT_PATTERN,
+  TERMINAL_STATE_PATTERN,
+  LEGITIMATE_WAIT_PATTERN,
 } = require('../src/joinFlow');
 
 let passed = 0;
@@ -437,6 +439,47 @@ check('joinFlow: pre-join wording is recognised from page text alone', () => {
   // An in-call page must not trip it, or every Zoom call would be refused.
   for (const text of ['Mute Stop Video Participants Chat', 'Waiting for the host to start this meeting']) {
     assert.ok(!PRE_JOIN_TEXT_PATTERN.test(text), `must not read as pre-join: ${text}`);
+  }
+});
+
+check('joinFlow: a finished call is recognised as finished', () => {
+  for (const text of [
+    'This meeting has ended',
+    'The webcast has concluded. A replay will be available shortly.',
+    'This event has been cancelled',
+    'The video is no longer available',
+    'This conference call is over',
+  ]) {
+    assert.ok(TERMINAL_STATE_PATTERN.test(text), `should read as over: ${text}`);
+  }
+});
+
+check('joinFlow: wording that appears beside a LIVE stream never refuses it', () => {
+  // The asymmetry that drives this list: a false refusal loses the call outright, and the call
+  // does not happen twice. Each of these can legitimately sit on a page whose audio is playing.
+  for (const text of [
+    'Registration is closed',                     // routine once a call has started
+    'Thank you for attending',                    // can be pre-set copy on the player page
+    'A replay will be available after the call',  // a promise about later, not a state now
+    'Q2 2026 Earnings Call',
+    'Mute Stop Video Participants Chat Leave',
+    'The webcast will begin shortly. Please wait.',
+    'Waiting for the host to start this meeting',
+  ]) {
+    assert.ok(!TERMINAL_STATE_PATTERN.test(text), `must NOT refuse: ${text}`);
+  }
+});
+
+check('joinFlow: healthy pre-call waiting is recognised as healthy', () => {
+  for (const text of [
+    'Waiting for the host to start this meeting',
+    'The webcast will begin shortly',
+    'The meeting has not started yet',
+    'Please wait, you are in the waiting room',
+  ]) {
+    assert.ok(LEGITIMATE_WAIT_PATTERN.test(text), `should read as a healthy wait: ${text}`);
+    // The two must not overlap, or joining early would be refused as "already over".
+    assert.ok(!TERMINAL_STATE_PATTERN.test(text), `waiting must not also read as over: ${text}`);
   }
 });
 

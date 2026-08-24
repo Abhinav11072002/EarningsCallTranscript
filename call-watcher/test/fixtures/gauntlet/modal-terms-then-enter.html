@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><title>Q2 2026 Earnings Call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false">
+<style>
+ #modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:9999;
+        display:flex;align-items:center;justify-content:center}
+ #box{background:#fff;padding:30px}
+</style></head>
+<body>
+  <div id="modal"><div id="box">
+    <h2>Terms of use</h2>
+    <button id="accept" type="button">I agree to the terms and conditions</button>
+  </div></div>
+  <div id="gate"><button id="enter" type="button">Enter the event</button></div>
+  <div id="inmeeting" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('accept').addEventListener('click', function () {
+      document.getElementById('modal').remove();
+    });
+    document.getElementById('enter').addEventListener('click', function () {
+      document.getElementById('gate').hidden = true;
+      document.getElementById('inmeeting').hidden = false;
+    });
+  </script>
+</body></html>

@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><title>Q2 2026 Earnings Call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <div id="mount"><p>Loading...</p></div>
+  <div id="inmeeting" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    setTimeout(function(){
+      document.getElementById('mount').innerHTML =
+        '<form id="f"><label for="fn">First name</label><input id="fn" data-expect="firstName">' +
+        '<label for="ln">Last name</label><input id="ln" data-expect="lastName">' +
+        '<label for="em">Email</label><input id="em" type="email" data-expect="email">' +
+        '<button type="submit">Register</button></form>';
+      document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();
+        document.getElementById('mount').hidden=true;
+        document.getElementById('inmeeting').hidden=false;});
+    }, 1800);
+  </script>
+</body></html>

@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><title>Q2 2026 Earnings Call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false">
+<style>
+  #overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:9999}
+  #banner{position:fixed;bottom:0;left:0;right:0;background:#fff;padding:20px;z-index:10000}
+</style></head>
+<body>
+  <div id="overlay"></div>
+  <div id="banner">
+    We use cookies. <button id="onetrust-accept-btn-handler" type="button">Accept All Cookies</button>
+  </div>
+  <div id="gate"><button id="enter" type="button">Enter event</button></div>
+  <div id="inmeeting" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('onetrust-accept-btn-handler').addEventListener('click',function(){
+      document.getElementById('overlay').remove();
+      document.getElementById('banner').remove();});
+    document.getElementById('enter').addEventListener('click',function(){
+      document.getElementById('gate').hidden=true;
+      document.getElementById('inmeeting').hidden=false;});
+  </script>
+</body></html>

@@ -185,10 +185,12 @@ npm install
 ### Tests
 
 ```powershell
-npm test               # everything: unit, then the two browser suites
-npm run test:unit      # pure logic - no browser needed, ~1s
+npm test                 # everything: unit, then the four browser suites
+npm run test:unit        # pure logic - no browser needed, ~1s
 npm run test:registration
 npm run test:resolver
+npm run test:join        # Zoom-style client-choice interstitials
+npm run test:gauntlet    # the wide adversarial sweep (add --verbose for the log)
 ```
 
 `npm run test:unit` covers the parts that are easy to get subtly wrong and used to have no
@@ -196,7 +198,24 @@ coverage at all: the three time formats (including the America/New_York DST math
 the retry state machine and its attempt cap, log retention, and the fiscal-period split shared
 by the write and read paths. It needs no Chrome, so it is the one to run before every commit.
 
-The other two need the debug Chrome running (they drive real pages). Two further scripts are
+`npm run test:gauntlet` is the broadest of these and the one to run after touching anything in
+`joinFlow.js` or `formFiller.js`. Each fixture in `test/fixtures/gauntlet/` declares its own
+expectations in `<meta>` tags, so adding a newly-encountered provider means dropping in one HTML
+file - no runner changes. It drives the real pipeline in the real order (join flow, form filler,
+join flow again, then the relevance guard), which is what makes it catch interaction bugs that
+per-helper tests cannot: a click that opens the call in a new tab, a modal that swallows the
+click that would have cleared the gate, an entry button whose lingering presence is misread as
+an unresolved gate.
+
+The assertion that matters most is `data-forbidden`. An element marked with it must never be
+clicked, and most of the damage this project has done came from clicking a plausible wrong
+thing - a native-app handler that steals the foreground, a replay link, a "Leave" button. Each
+leaves a page that still looks broadly reasonable afterwards, which is exactly why they went
+unnoticed. Timing is asserted too (a fixture over 20s fails): everything here runs under the
+pipeline lock, so a slow page is not a cosmetic problem, it delays every later call in the same
+15-minute window.
+
+The other four need the debug Chrome running (they drive real pages). Two further scripts are
 manual diagnostics rather than tests - `scripts/test-extension-trigger.js <SYM> <YEAR> <Q>`
 drives the whole popup path once and prints the timing, and `scripts/test-click-resolver.js
 <SYM>` resolves one truncated link. Both start a **real** transcription against whatever tab is

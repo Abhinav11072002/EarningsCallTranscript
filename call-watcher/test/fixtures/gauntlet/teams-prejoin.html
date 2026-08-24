@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><title>Teams pre-join</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <div id="prejoin">
+    <h2>Choose your audio and video settings</h2>
+    <form id="f">
+      <label for="nm">Type your name</label><input id="nm" data-expect="fullName">
+      <button type="submit">Join now</button>
+    </form>
+  </div>
+  <div id="inmeeting" hidden data-incall="true"><h2>Meeting</h2><audio controls></audio></div>
+  <script>
+    var f=document.getElementById('f');
+    f.addEventListener('submit',function(e){e.preventDefault();
+      if(!document.getElementById('nm').value.trim())return;
+      document.getElementById('prejoin').hidden=true;
+      document.getElementById('inmeeting').hidden=false;});
+  </script>
+</body></html>

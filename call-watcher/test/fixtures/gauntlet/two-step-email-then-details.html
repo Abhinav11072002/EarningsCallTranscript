@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head><title>Register for the call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <div id="s1">
+    <h2>Enter your email to continue</h2>
+    <form id="f1">
+      <label for="em">Email address</label><input id="em" type="email" data-expect="email">
+      <button type="submit">Continue</button>
+    </form>
+  </div>
+  <div id="s2" hidden>
+    <h2>Tell us about yourself</h2>
+    <form id="f2">
+      <label for="fn">First name</label><input id="fn" data-expect="firstName">
+      <label for="ln">Last name</label><input id="ln" data-expect="lastName">
+      <label for="co">Company</label><input id="co" data-expect="company">
+      <button type="submit">Join the webcast</button>
+    </form>
+  </div>
+  <div id="ok" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('f1').addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (!document.getElementById('em').value.trim()) return;
+      document.getElementById('s1').hidden = true;
+      document.getElementById('s2').hidden = false;
+    });
+    document.getElementById('f2').addEventListener('submit', function (e) {
+      e.preventDefault();
+      document.getElementById('s2').hidden = true;
+      document.getElementById('ok').hidden = false;
+    });
+  </script>
+</body></html>

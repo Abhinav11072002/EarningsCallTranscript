@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><title>Register</title>
+<meta name="expect-joined" content="false"><meta name="expect-refused" content="false">
+<meta name="expect-pending" content="true"></head>
+<body>
+  <h1>Register for the call</h1>
+  <form id="f">
+    <label for="e">Email address</label><input id="e" name="email" type="email" data-expect="email">
+    <div class="g-recaptcha" data-sitekey="abc" style="width:300px;height:74px;border:1px solid #ccc">
+      Verify you are human
+    </div>
+    <button type="submit">Register</button>
+  </form>
+  <script>document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();});</script>
+</body></html>

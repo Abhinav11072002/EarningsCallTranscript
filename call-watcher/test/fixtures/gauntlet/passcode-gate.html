@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><title>Conference access</title>
+<meta name="expect-joined" content="false"><meta name="expect-refused" content="false">
+<meta name="expect-pending" content="true"></head>
+<body>
+  <h1>Enter your conference passcode</h1>
+  <form id="f">
+    <label for="pc">Passcode</label><input id="pc" name="passcode" data-expect="none">
+    <button type="submit">Enter</button>
+  </form>
+  <script>document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();});</script>
+</body></html>

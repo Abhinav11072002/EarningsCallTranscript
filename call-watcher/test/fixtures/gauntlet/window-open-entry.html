@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><title>Investor webcast</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <h1>Investor webcast</h1>
+  <button id="go" type="button">Enter the webcast</button>
+  <script>
+    document.getElementById('go').addEventListener('click', function () {
+      window.open('/gauntlet/in-call', '_blank');
+    });
+  </script>
+</body></html>

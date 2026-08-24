@@ -83,15 +83,33 @@ function registrationFrames(page) {
   return page.frames();
 }
 
+// Waits for a client-rendered gate to appear, but not for one that is never coming. Measured on
+// the gauntlet: pages with no form controls at all (an ended-meeting notice, a Teams client
+// chooser built from plain links) sat here for the full 8s each - and this runs under the
+// pipeline lock, so that is 8s added to every later call in the same 15-minute window.
 async function waitForRegistrationSurface(page) {
   const deadline = Date.now() + 8000;
+  const started = Date.now();
   while (Date.now() < deadline) {
+    let rendered = false;
     for (const frame of registrationFrames(page)) {
       const controls = await frame
         .$$('input:visible, select:visible, textarea:visible, button:visible, [role=button]:visible')
         .catch(() => []);
       if (controls.length) return;
+      if (!rendered) {
+        rendered = await frame
+          .evaluate(() => {
+            if (document.querySelector('a, audio, video, iframe, [class*="player" i]')) return true;
+            return (document.body ? (document.body.innerText || '').trim().length : 0) > 200;
+          })
+          .catch(() => false);
+      }
     }
+    // The page has clearly finished rendering something - links, a player, or real prose - and
+    // still has no form control. Whatever gate it has is not made of form controls, so there is
+    // nothing left to wait for. A page still booting is blank and keeps the full budget.
+    if (rendered && Date.now() - started > 2000) return;
     await page.waitForTimeout(250);
   }
 }
@@ -148,7 +166,33 @@ function isOffscreen(handle) {
     .catch(() => false);
 }
 
+// 600ms, not several seconds. A popup opened by a click fires essentially synchronously with
+// it, so a longer window buys nothing - but it is paid on EVERY click that does not open one,
+// which is almost all of them. Measured at 6000ms: the gauntlet stopped finishing at all,
+// because four filler steps across several frames each waited the full timeout in turn.
+const POPUP_GRACE_MS = 600;
+// One definition, used by both the step loop and the click selection. They were separate
+// strings before, and drifted: the click step learned to consider plain anchors while the step
+// loop still did not count them as controls, so a page whose only gate was a link was skipped
+// before the click step ever ran. The bug looked exactly like the anchor support not working.
+const CLICKABLE_SELECTOR =
+  'button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible, a[href]:visible';
+
 const CLICK_TIMEOUT_MS = 5000;
+
+// Entry CTAs for gates that have nothing to type - the page is one button away from the call.
+// Kept separate from REGISTRATION_BUTTON_PATTERN because these are also accepted when no field
+// was filled, which is exactly the case REGISTRATION_BUTTON_PATTERN was too narrow for: an
+// "Enter event" button and a "Join the live webcast" button both matched nothing, so a
+// one-click gate was left sitting on screen and recorded.
+const ENTRY_BUTTON_PATTERN =
+  /enter (?:the )?(?:event|webcast|call|meeting|room|here)|join (?:the )?(?:live )?(?:webcast|call|meeting|event|now)|access (?:the )?(?:webcast|event|call|live)|watch (?:the )?(?:live )?(?:webcast|stream|now)|listen (?:to )?(?:the )?(?:live )?(?:webcast|call|audio|now)|proceed (?:to )?(?:the )?(?:event|webcast|call)?/i;
+
+// Wording that marks a link as the PAST recording rather than the live call. Mirrors
+// webcastResolver.js's STALE_LINK_PATTERN: the resolver already refuses to navigate to these,
+// and the form filler must equally refuse to click them - "Listen to the replay" scores as a
+// perfectly good CTA otherwise, and produces a capture that looks entirely successful.
+const STALE_BUTTON_PATTERN = /replay|archive|on-?demand|playback|recording|transcript|presentation|slides?|download/i;
 
 const CTA_BUTTON_PATTERN = /register|submit|enter|join|continue|watch now|listen now|access|attend/i;
 const REGISTRATION_BUTTON_PATTERN = /register|registration|sign\s*in|log\s*in|account|continue\s+registration|continue\s+without|guest|join\s+(the\s+)?(webinar|conference|event)|attend\s+(the\s+)?event/i;
@@ -218,8 +262,16 @@ async function fillVisibleFields(frame, identity, logger, allowFurnitureFallback
         await el.fill(String(identity[key]));
       }
       const value = await el.inputValue();
+      // el is an ElementHandle, which has no .locator() - that call threw on EVERY <select>,
+      // was swallowed by the catch below, and made the field count as unfilled even though the
+      // option had been selected correctly. filledCount drives whether the click step is
+      // allowed its submit fallback and whether it restricts itself to registration-worded
+      // buttons, so a form whose only field was a country dropdown was handled as though
+      // nothing had been typed at all.
       const selectedLabel = tag === 'select'
-        ? await el.locator('option:checked').textContent().catch(() => '')
+        ? await el
+            .evaluate((node) => (node.selectedOptions && node.selectedOptions[0] ? node.selectedOptions[0].textContent : ''))
+            .catch(() => '')
         : '';
       const retained = [value, selectedLabel].some((item) =>
         String(item || '').trim().toLowerCase() === String(identity[key]).trim().toLowerCase()
@@ -247,6 +299,12 @@ async function checkRequiredConsent(frame, logger) {
   }
 }
 
+// Wording used to get past a consent/terms modal. Only ever applied INSIDE a detected overlay
+// (see below), never to the page at large - "I agree" also appears next to checkboxes and in
+// footers, and clicking those is either useless or actively wrong.
+const OVERLAY_DISMISS_PATTERN =
+  /accept(?: all| cookies)?|i (?:agree|understand|accept)|agree(?: to)?(?: the)?(?: terms)?|got it|allow all|continue to (?:the )?site|acknowledge|close|dismiss|ok\b/i;
+
 async function dismissCookieOverlays(page, logger) {
   const selectors = [
     '#onetrust-accept-btn-handler',
@@ -260,12 +318,94 @@ async function dismissCookieOverlays(page, logger) {
       return;
     }
   }
+  await dismissBlockingOverlays(page, logger);
 }
 
-async function clickFirstMatchingButton(frame, logger, allowSubmitFallback = false, registrationOnly = false) {
-  const buttons = await frame.$$('button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible').catch(() => []);
+// A terms/consent modal that COVERS the entry button. Playwright refuses to click an element
+// another node is painted over, so before this the click simply timed out (5s, under the
+// pipeline lock) and the call was abandoned at a gate one button away from being cleared.
+//
+// Detection is geometric rather than by class name: a fixed/sticky element with a high z-index
+// covering a quarter of the viewport is a modal whatever it calls itself. That is what keeps
+// this from firing on ordinary page furniture.
+async function dismissBlockingOverlays(page, logger) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const handles = await page.$$('div:visible, section:visible, aside:visible, dialog:visible').catch(() => []);
+    let dismissed = false;
+    for (const handle of handles) {
+      const isOverlay = await handle
+        .evaluate((node) => {
+          const style = getComputedStyle(node);
+          if (!['fixed', 'sticky'].includes(style.position)) return false;
+          if ((parseInt(style.zIndex, 10) || 0) < 100) return false;
+          const r = node.getBoundingClientRect();
+          const w = window.innerWidth || 1;
+          const h = window.innerHeight || 1;
+          return (r.width * r.height) / (w * h) > 0.25;
+        })
+        .catch(() => false);
+      if (!isOverlay) continue;
+
+      const buttons = await handle.$$('button:visible, a[role=button]:visible, input[type=button]:visible').catch(() => []);
+      for (const btn of buttons) {
+        const text = ((await btn.innerText().catch(() => '')) || (await btn.getAttribute('value').catch(() => '')) || '').trim();
+        if (!text || text.length > 60 || !OVERLAY_DISMISS_PATTERN.test(text)) continue;
+        const ok = await btn.click({ timeout: 2000 }).then(() => true).catch(() => false);
+        if (ok) {
+          logger.info(`Dismissed a blocking overlay via "${text}".`);
+          dismissed = true;
+          break;
+        }
+      }
+      if (dismissed) break;
+    }
+    if (!dismissed) return;
+    await page.waitForTimeout(400);
+  }
+}
+
+// Clicks, and follows the call if the click opened it in a new tab. Capture is per-tab, so a
+// target=_blank / window.open entry point that we do not follow leaves us holding the landing
+// page while the call plays in a tab nothing is watching - a capture that looks entirely
+// successful and contains none of the call. Verified against both fixtures in the gauntlet.
+async function clickAndAdoptPopup(page, btn, text, logger) {
+  // Armed before the click: a popup opened while we were not listening cannot be adopted.
+  const popupPromise = page.waitForEvent('popup', { timeout: POPUP_GRACE_MS }).catch(() => null);
+  const clicked = await btn
+    .click({ timeout: CLICK_TIMEOUT_MS })
+    .then(() => true)
+    .catch((err) => {
+      logger.warn(`Failed clicking button "${text}": ${err.message}`);
+      return false;
+    });
+  if (!clicked) return { clicked: false, page };
+
+  const popup = await popupPromise;
+  if (!popup) return { clicked: true, page };
+
+  await popup.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+  if (!/^https?:/i.test(popup.url())) {
+    logger.warn(`"${text}" opened a new tab at "${popup.url()}" which is not usable; staying put.`);
+    await popup.close().catch(() => {});
+    return { clicked: true, page };
+  }
+  logger.info(`"${text}" opened the call in a new tab (${popup.url()}); following it and closing the old one.`);
+  const previous = page;
+  await previous.close().catch(() => {});
+  return { clicked: true, page: popup };
+}
+
+async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback = false, registrationOnly = false) {
+  // Plain anchors are included, which they were not before: a real gate is often just a link
+  // ("Join the live webcast" as an <a target="_blank">), and skipping those meant the pipeline
+  // walked past a one-click entry and recorded the landing page. Anchors are held to a stricter
+  // bar than buttons below - entry/registration wording only, never the loose CTA or
+  // submit-type fallbacks - because every page is full of links and most of them lead away.
+  const buttons = await frame.$$(CLICKABLE_SELECTOR).catch(() => []);
   const candidates = [];
   for (const btn of buttons) {
+    const tag = await btn.evaluate((n) => n.tagName.toLowerCase()).catch(() => '');
+    const isPlainAnchor = tag === 'a';
     const text = ((await btn.innerText().catch(() => '')) || (await btn.getAttribute('value').catch(() => '')) || '').trim();
     const type = ((await btn.getAttribute('type').catch(() => '')) || '').toLowerCase();
     // Never click site chrome or an unrelated CTA. A header "Sign In" matches the registration
@@ -276,39 +416,34 @@ async function clickFirstMatchingButton(frame, logger, allowSubmitFallback = fal
     // clicking it fires a zoommtg:// handler whose OS dialog steals the foreground - which is
     // exactly what the extension keystroke needs moments later. See joinFlow.js.
     if (NATIVE_APP_PATTERN.test(text)) continue;
+    if (STALE_BUTTON_PATTERN.test(text)) continue;
     if (await isFurniture(btn)) continue;
     const score = /continue\s+without|guest/i.test(text) ? 6 : /register|registration/i.test(text) ? 5 : /submit|continue|join|enter|watch now|listen now|access|attend/i.test(text) ? 4 : type === 'submit' ? 2 : 0;
-    if (!score || (registrationOnly && !REGISTRATION_BUTTON_PATTERN.test(text))) continue;
-    if (!CTA_BUTTON_PATTERN.test(text) && !(allowSubmitFallback && type === 'submit')) continue;
-    candidates.push({ btn, text, score });
+    const entryWorded = REGISTRATION_BUTTON_PATTERN.test(text) || ENTRY_BUTTON_PATTERN.test(text);
+    // A link only qualifies on explicit entry wording. Without this, "Contact Investor
+    // Relations" or a footer link would become a candidate on almost every page.
+    if (isPlainAnchor && !entryWorded) continue;
+    if (!score || (registrationOnly && !entryWorded)) continue;
+    if (!CTA_BUTTON_PATTERN.test(text) && !entryWorded && !(allowSubmitFallback && type === 'submit')) continue;
+    candidates.push({ btn, text, score, entryWorded });
   }
   candidates.sort((a, b) => b.score - a.score);
-  for (const { btn, text } of candidates) {
-    // Bounded deliberately. Playwright's default click timeout is 30s, and it spends that
-    // whole budget retrying against a button that is merely disabled - which is the normal
-    // state of Zoom's "Join" until a name has been entered. Measured: one such button stalled
-    // the pipeline for 30s, and this runs under the pipeline lock, so every later call in the
-    // window waits behind it. 5s is generous for a button that is going to become enabled at
-    // all (debounced validation), and cheap when it is not.
-    const clicked = await btn
-      .click({ timeout: CLICK_TIMEOUT_MS })
-      .then(() => true)
-      .catch((err) => {
-        logger.warn(`Failed clicking button "${text}": ${err.message}`);
-        return false;
-      });
-    if (clicked) {
-      return true;
-    }
+  for (const { btn, text, entryWorded } of candidates) {
+    // The click itself is bounded inside clickAndAdoptPopup. Playwright's default is 30s, and
+    // it spends all of it retrying a merely-disabled button - the normal state of Zoom's
+    // "Join" before a name is typed. That ran under the pipeline lock, so every later call in
+    // the window queued behind it.
+    const result = await clickAndAdoptPopup(page, btn, text, logger);
+    if (result.clicked) return { clicked: true, page: result.page, clickedText: text, entryWorded };
   }
-  return false;
+  return { clicked: false, page, clickedText: null, entryWorded: false };
 }
 
 // "Is a gate still blocking us?" - the answer gates the whole call, so it must only count
 // evidence that plausibly belongs to a registration form. Site chrome and unrelated inputs are
 // excluded for the reasons documented on FURNITURE_SELECTOR: counting them reported a gate on
 // pages that were already joinable, which failed the call outright.
-async function hasPendingRegistration(page) {
+async function hasPendingRegistration(page, clearedEntryButtons = new Set()) {
   for (const frame of page.frames()) {
     const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
     for (const field of fields) {
@@ -327,8 +462,11 @@ async function hasPendingRegistration(page) {
     const buttons = await frame.$$('button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible').catch(() => []);
     for (const button of buttons) {
       const text = ((await button.innerText().catch(() => '')) || (await button.getAttribute('value').catch(() => '')) || '').trim();
-      if (!REGISTRATION_BUTTON_PATTERN.test(text)) continue;
+      if (!REGISTRATION_BUTTON_PATTERN.test(text) && !ENTRY_BUTTON_PATTERN.test(text)) continue;
+      // We already clicked this one and it worked; its lingering presence is cosmetic.
+      if (clearedEntryButtons.has(text)) continue;
       if (IRRELEVANT_BUTTON_PATTERN.test(text)) continue;
+      if (NATIVE_APP_PATTERN.test(text) || STALE_BUTTON_PATTERN.test(text)) continue;
       if (await isFurniture(button)) continue;
       return true;
     }
@@ -342,6 +480,41 @@ async function hasPendingRegistration(page) {
 // that inference.
 const REGISTRATION_SUCCESS_PATTERN =
   /registration (complete|completed|successful|confirmed)|thank you for registering|you (are|have been) registered|registered for (the )?(conference|event|webcast)|successfully registered/i;
+
+// A challenge we have no way to satisfy. Detected structurally (widget markup) rather than by
+// wording, because the visible text is localised and often absent until interaction. This does
+// not attempt to solve anything - the point is to fail LOUDLY. Before this, a reCAPTCHA-gated
+// registration filled its fields, submitted nothing, and the still-visible gate page was
+// recorded as though it were the call.
+const CHALLENGE_SELECTOR = [
+  '.g-recaptcha',
+  '#g-recaptcha',
+  '[data-sitekey]',
+  'iframe[src*="recaptcha"]',
+  'iframe[src*="hcaptcha"]',
+  'iframe[title*="challenge" i]',
+  '.h-captcha',
+  '#cf-challenge-running',
+  '[class*="turnstile"]',
+].join(', ');
+
+async function hasUnsolvableChallenge(page) {
+  for (const frame of page.frames()) {
+    const found = await frame
+      .evaluate((selector) => {
+        for (const el of document.querySelectorAll(selector)) {
+          const r = el.getBoundingClientRect();
+          // A zero-size node is an invisible/score-based widget that needs no interaction;
+          // only a rendered challenge actually blocks the form.
+          if (r.width > 20 && r.height > 20) return true;
+        }
+        return false;
+      }, CHALLENGE_SELECTOR)
+      .catch(() => false);
+    if (found) return true;
+  }
+  return false;
+}
 
 async function hasRegistrationSuccess(page) {
   for (const frame of page.frames()) {
@@ -383,11 +556,17 @@ async function fillRegistrationForm(page, identity, logger) {
 
   let foundAny = false;
   let lastAction = false;
+  // Entry CTAs we successfully clicked. Some providers reveal the player WITHOUT removing the
+  // button that revealed it; the pending check would then see its own successful click as
+  // proof of an unresolved gate and fail a call that had actually been joined. Registration-
+  // worded buttons are deliberately NOT remembered - if a "Register" button is still there, a
+  // real form gate probably is too, and that must stay a loud failure.
+  const clearedEntryButtons = new Set();
   for (let step = 0; step < 4; step++) {
     let acted = false;
     for (const frame of registrationFrames(page)) {
       const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
-      const buttons = await frame.$$('button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible').catch(() => []);
+      const buttons = await frame.$$(CLICKABLE_SELECTOR).catch(() => []);
       if (!fields.length && !buttons.length) continue;
       foundAny = true;
       // The furniture fallback is only for a first-pass gate that genuinely lives in site
@@ -396,9 +575,20 @@ async function fillRegistrationForm(page, identity, logger) {
       // identity and widens the set of buttons the click step will then accept.
       const filledCount = await fillVisibleFields(frame, identity, logger, step === 0 && !lastAction);
       await checkRequiredConsent(frame, logger);
-      const clicked = await clickFirstMatchingButton(frame, logger, filledCount > 0, filledCount === 0);
-      if (filledCount || clicked) acted = true;
-      if (filledCount || clicked) lastAction = true;
+      const outcome = await clickFirstMatchingButton(page, frame, logger, filledCount > 0, filledCount === 0);
+      if (outcome.clicked && outcome.entryWorded && !REGISTRATION_BUTTON_PATTERN.test(outcome.clickedText)) {
+        clearedEntryButtons.add(outcome.clickedText);
+      }
+      if (filledCount || outcome.clicked) {
+        acted = true;
+        lastAction = true;
+      }
+      // Adopting a popup invalidates every handle from the old page, so the frame loop must
+      // stop here and the next step re-query against the tab we now hold.
+      if (outcome.page !== page) {
+        page = outcome.page;
+        break;
+      }
     }
     if (!acted) break;
     await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
@@ -413,14 +603,22 @@ async function fillRegistrationForm(page, identity, logger) {
   // An error message outranks a success message (some pages show both, e.g. "registered" plus
   // "this email is not accepted"), so the error is checked first and wins.
   const error = await findRegistrationError(page);
-  let pending = foundAny && (await hasPendingRegistration(page));
+  let pending = foundAny && (await hasPendingRegistration(page, clearedEntryButtons));
   if (pending && !error && (await hasRegistrationSuccess(page))) {
     logger.info('Registration acknowledged by the page; treating the gate as cleared.');
     pending = false;
   }
+  // A rendered challenge means the gate cannot be cleared by us, whatever the field checks
+  // conclude. Asserted after the success check so a page that already let us through (and
+  // merely carries a widget elsewhere) is not failed retroactively.
+  if (!pending && !(await hasRegistrationSuccess(page)) && (await hasUnsolvableChallenge(page))) {
+    logger.warn('A CAPTCHA/anti-bot challenge is on screen; this gate cannot be cleared automatically.');
+    pending = true;
+  }
   if (error) logger.warn(`Registration page reports an error: ${error}`);
   if (lastAction && pending) logger.warn('Registration may still be incomplete after the available steps.');
-  return { foundAny, pending, error: pending ? error : null };
+  // `page` is returned because it may no longer be the one passed in - see clickAndAdoptPopup.
+  return { foundAny, pending, error: pending ? error : null, page };
 }
 
-module.exports = { fillRegistrationForm, matchField };
+module.exports = { fillRegistrationForm, matchField, hasUnsolvableChallenge };

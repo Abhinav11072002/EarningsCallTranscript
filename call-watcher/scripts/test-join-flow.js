@@ -62,7 +62,7 @@ const nativeWasClicked = (page) => page.evaluate(() => Boolean(window.__nativeCl
   const base = `http://127.0.0.1:${port}`;
   const browser = await chromium.connectOverCDP(config.cdpUrl);
   const context = browser.contexts()[0];
-  const page = await context.newPage();
+  let page = await context.newPage();
   page.on('dialog', (d) => d.dismiss().catch(() => {}));
 
   try {
@@ -71,12 +71,13 @@ const nativeWasClicked = (page) => page.evaluate(() => Boolean(window.__nativeCl
     const blockerAtLobby = await describeJoinBlocker(page);
     record('lobby is recognised as not-yet-in-the-call', Boolean(blockerAtLobby), blockerAtLobby || 'no blocker reported');
 
-    await advanceJoinFlow(page, logger);
+    page = await advanceJoinFlow(page, logger);
     const reachedClient = page.url().includes('/wc/83171321596/join');
     record('lobby advances to the browser client', reachedClient, page.url());
 
     const reg = await fillRegistrationForm(page, identity, logger);
-    await advanceJoinFlow(page, logger);
+    if (reg.page) page = reg.page;
+    page = await advanceJoinFlow(page, logger);
     const nameValue = await page.locator('#input-for-name').inputValue().catch(() => '');
     const inMeeting = await page.locator('#inmeeting').isVisible().catch(() => false);
     record('name is filled and Join submitted', inMeeting && Boolean(nameValue.trim()), `name=${JSON.stringify(nameValue)} pending=${reg.pending}`);
@@ -90,24 +91,26 @@ const nativeWasClicked = (page) => page.evaluate(() => Boolean(window.__nativeCl
     await page.goto(`${base}/app-only`);
     const action = await findBrowserEntryAction(page);
     record('app-only lobby offers no browser entry', action === null, action ? `found ${action.kind}: ${action.text}` : 'none');
-    await advanceJoinFlow(page, logger);
+    page = await advanceJoinFlow(page, logger);
     record('app-only lobby: nothing was clicked', !(await nativeWasClicked(page)));
     const appOnlyBlocker = await describeJoinBlocker(page);
     record('app-only lobby is refused by the guard', Boolean(appOnlyBlocker), appOnlyBlocker || 'NOT refused');
 
     // 3. A genuine form beside a native-app CTA: fill the form, leave the button alone.
     await page.goto(`${base}/native-plus-form`);
-    await advanceJoinFlow(page, logger);
+    page = await advanceJoinFlow(page, logger);
     const formResult = await fillRegistrationForm(page, identity, logger);
+    if (formResult.page) page = formResult.page;
     const submitted = await page.locator('#result').isVisible().catch(() => false);
     record('form beside an app button still registers', submitted && !formResult.pending, `pending=${formResult.pending}`);
     record('form beside an app button: app left alone', !(await nativeWasClicked(page)));
 
     // 4. Already joined: the flow must not interfere and the guard must not refuse.
     await page.goto(`${base}/in-meeting`);
-    const advanced = await advanceJoinFlow(page, logger);
-    const stillThere = page.url().endsWith('/in-meeting');
-    record('in-meeting page is left untouched', advanced === false && stillThere, `advanced=${advanced} url=${page.url()}`);
+    const before = page;
+    page = await advanceJoinFlow(page, logger);
+    const stillThere = page === before && page.url().endsWith('/in-meeting');
+    record('in-meeting page is left untouched', stillThere, `sameTab=${page === before} url=${page.url()}`);
     const liveBlocker = await describeJoinBlocker(page);
     record('in-meeting page is not refused', liveBlocker === null, liveBlocker || 'clear');
   } finally {

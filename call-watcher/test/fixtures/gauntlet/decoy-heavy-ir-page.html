@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><title>Investor Relations</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <nav>
+    <a href="#" data-forbidden="true" onclick="return false">Sign In</a>
+    <a href="#" data-forbidden="true" onclick="return false">Careers</a>
+    <a href="#" data-forbidden="true" onclick="return false">Contact Investor Relations</a>
+  </nav>
+  <h1>Q2 2026 Earnings Call</h1>
+  <ul>
+    <li><a href="#" data-forbidden="true" onclick="return false">Q1 2026 earnings call replay</a></li>
+    <li><a href="#" data-forbidden="true" onclick="return false">Download the Q2 2026 presentation (PDF)</a></li>
+    <li><a href="#" data-forbidden="true" onclick="return false">Q2 2026 press release</a></li>
+    <li><button id="live" type="button">Access the live webcast</button></li>
+  </ul>
+  <footer>
+    <form id="news"><input id="nl" type="email" placeholder="Subscribe to our newsletter" data-expect="none">
+    <button type="submit">Subscribe</button></form>
+  </footer>
+  <div id="inmeeting" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('news').addEventListener('submit', function (e) { e.preventDefault(); });
+    document.getElementById('live').addEventListener('click', function () {
+      document.getElementById('inmeeting').hidden = false;
+    });
+  </script>
+</body></html>

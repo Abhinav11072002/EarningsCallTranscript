@@ -265,7 +265,7 @@ const REPLAY_TITLE_PATTERN = /\breplay\b|\barchive[sd]?\b|on-?demand|\btranscrip
 // Deliberately permissive: it looks for the ticker root OR a quarter token anywhere in the
 // title/URL/visible text, and only refuses when it finds NOTHING relevant. A false refusal
 // costs one retry and a loud log line; a false accept costs the transcript.
-async function assertPageLooksRelevant(page, row, logger, config) {
+async function assertPageLooksRelevant(page, row, logger, config, dialinUrl) {
   const { year, period } = splitFiscalPeriod(row.fiscalPeriod);
   const symbolRoot = String(row.symbol || '')
     .split(/[.\-^]/)[0]
@@ -307,13 +307,30 @@ async function assertPageLooksRelevant(page, row, logger, config) {
   // itself does, which is how an earlier, looser version of this check passed on a page that had
   // nothing to do with the call). Accept only a genuine identifier: the ticker, or the quarter
   // AND year together, or a player element accompanied by one of them.
+  // The portal's own dial-in link is authoritative: if we are still on the host it pointed at,
+  // no resolution decision was made that could have gone wrong, and there is nothing for this
+  // check to catch. Observed live on NSSC 2026Q4 - app.webinar.net serves a player whose title
+  // is just "webinar.net" and whose visible text names neither the ticker nor the quarter, so
+  // the identity tiers below refused it on every retry until the call was gone. A false accept
+  // costs one transcript; a false refusal costs the call itself, and the call does not repeat.
+  // The bad-title, replay and pre-join checks above still apply, so a dead or wrong-state page
+  // on the right host is still refused.
+  let sameHostAsDialin = false;
+  try {
+    if (dialinUrl) sameHostAsDialin = new URL(probe.url).hostname === new URL(dialinUrl).hostname;
+  } catch {
+    sameHostAsDialin = false;
+  }
+
   const accepted = symbolMatch
     ? `symbol "${symbolRoot}"`
     : yearMatch && periodMatch
       ? `${period} ${year}`
       : probe.hasMedia && (yearMatch || periodMatch)
         ? `a player element plus ${periodMatch ? period : year}`
-        : null;
+        : sameHostAsDialin
+          ? `it being the dial-in link the portal gave us (${new URL(probe.url).hostname})`
+          : null;
 
   if (!accepted) {
     const message =
@@ -333,7 +350,7 @@ async function assertPageLooksRelevant(page, row, logger, config) {
 
 // Brings the call tab to front, triggers the popup via the global shortcut, then finds and
 // drives it via raw CDP (Symbol/Year/Period + Start Transcription).
-async function triggerExtension(context, targetPage, row, config, logger) {
+async function triggerExtension(context, targetPage, row, config, logger, dialinUrl) {
   const extensionId = await getExtensionId(context, config);
   const commandTimeoutMs = Number(config.cdpCommandTimeoutMs ?? DEFAULT_CDP_COMMAND_TIMEOUT_MS);
 
@@ -343,7 +360,7 @@ async function triggerExtension(context, targetPage, row, config, logger) {
   if (BAD_TARGET_TITLE_PATTERN.test(titleHint)) {
     throw new Error(`Refusing to record: resolved page looks like an error/unrelated page ("${titleHint}")`);
   }
-  await assertPageLooksRelevant(targetPage, row, logger, config);
+  await assertPageLooksRelevant(targetPage, row, logger, config, dialinUrl);
 
   await sendGlobalShortcut(config.extensionShortcutSendKeys, config, titleHint, logger);
 
@@ -417,6 +434,8 @@ async function triggerExtension(context, targetPage, row, config, logger) {
 }
 
 module.exports = {
+  // Exported for tests/diagnostics: it is pure inspection, no focus or capture side effects.
+  assertPageLooksRelevant,
   triggerExtension,
   splitFiscalPeriod,
   hasActiveStream,

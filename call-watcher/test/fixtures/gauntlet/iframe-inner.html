@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><title>inner</title></head>
+<body>
+  <form id="f">
+    <label for="fn">First name</label><input id="fn" data-expect="firstName">
+    <label for="em">Email address</label><input id="em" type="email" data-expect="email">
+    <button type="submit">Register</button>
+  </form>
+  <div id="ok" hidden data-incall="true">Registration complete</div>
+  <script>document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();
+    document.getElementById('f').hidden=true;document.getElementById('ok').hidden=false;});</script>
+</body></html>
