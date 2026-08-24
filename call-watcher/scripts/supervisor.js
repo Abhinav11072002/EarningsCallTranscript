@@ -20,6 +20,7 @@ const path = require('path');
 const { loadConfig } = require('../src/loadConfig');
 const { resolveLogPath } = require('../src/logRotation');
 const { blindReason } = require('../src/supervisorRules');
+const { releaseInstanceLock } = require('../src/instanceLock');
 
 const ROOT = path.join(__dirname, '..');
 const DATA_DIR = path.join(ROOT, 'data');
@@ -119,7 +120,14 @@ function restartChild(reason) {
   // follows only if it does not go quietly.
   doomed.kill('SIGTERM');
   const hardKill = setTimeout(() => doomed.kill('SIGKILL'), 10000);
-  doomed.on('exit', () => clearTimeout(hardKill));
+  doomed.on('exit', () => {
+    clearTimeout(hardKill);
+    // On Windows a killed process never runs its Node signal handlers, so the child cannot
+    // release its own lock. The supervisor knows exactly which pid it just stopped, so it
+    // clears the lock on the child's behalf - otherwise every restart logs a stale-lock
+    // takeover that means nothing to anyone.
+    releaseInstanceLock(DATA_DIR, { pid: doomed.pid });
+  });
   scheduleRestart();
 }
 
@@ -134,7 +142,11 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     stopping = true;
     log('INFO', `Received ${signal}; stopping the watcher.`);
-    if (child) child.kill('SIGINT'); // lets the watcher print its own summary
+    const doomed = child;
+    if (doomed) {
+      doomed.kill('SIGINT'); // lets the watcher print its own summary where the OS allows it
+      doomed.on('exit', () => releaseInstanceLock(DATA_DIR, { pid: doomed.pid }));
+    }
     setTimeout(() => process.exit(0), 3000);
   });
 }

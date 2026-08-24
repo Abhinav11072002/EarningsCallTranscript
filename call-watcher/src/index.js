@@ -324,8 +324,18 @@ async function main() {
   // is a single global resource that the batch pipeline already serializes carefully within one
   // process. Observed during testing - two were running and the heartbeat described whichever
   // wrote last.
+  // Set singleInstance=false in config.local.json to turn this into a warning. The guard is
+  // worth having - two watchers double-record and corrupt each other's state, and that is far
+  // harder to diagnose after the fact than a refused startup - but it is a judgement call about
+  // one machine's usage, and it should be the operator's to make.
   const lock = acquireInstanceLock(DATA_DIR);
-  if (!lock.ok) {
+  if (!lock.ok && config.singleInstance === false) {
+    logger.warn(
+      `Another call-watcher appears to be running (pid ${lock.holder.pid}, started ${lock.holder.startedAt}), ` +
+        'but singleInstance is disabled so this one is starting anyway. Two watchers on the same ' +
+        'Chrome can record the same call twice and overwrite each other’s state.'
+    );
+  } else if (!lock.ok) {
     logger.error(
       `Another call-watcher is already running (pid ${lock.holder.pid}, started ${lock.holder.startedAt}). ` +
         'Two watchers on the same Chrome and data directory overwrite one another and can ' +
@@ -337,7 +347,10 @@ async function main() {
   }
   if (lock.warning) logger.warn(`Instance lock: ${lock.warning}`);
   if (lock.takeover) {
-    logger.warn(`Took over a stale instance lock from pid ${lock.takeover.pid} (started ${lock.takeover.startedAt}) - ${lock.takeover.reason}.`);
+    // Routine, not a problem: on Windows a watcher stopped by anything other than Ctrl+C never
+    // runs its signal handlers, so it cannot release its own lock. Logged at info level because
+    // seeing it on every supervised restart taught nothing and looked like a fault.
+    logger.info(`Took over a stale instance lock from pid ${lock.takeover.pid} - ${lock.takeover.reason}.`);
   }
   const store = new StateStore(path.join(__dirname, '..', 'data', 'processed.json'), Number(config.stateRecordTtlDays ?? 7));
   const obs = createObservability(DATA_DIR, logger);

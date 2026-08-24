@@ -41,5 +41,6 @@
   ],
   "maxConcurrentPreparations": 3,
   "prepareDeadlineMs": 120000,
-  "triggerDeadlineMs": 90000
+  "triggerDeadlineMs": 90000,
+  "singleInstance": true
 }

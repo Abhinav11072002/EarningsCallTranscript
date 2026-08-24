@@ -39,6 +39,7 @@ const SPEC = {
   prepareDeadlineMs: { type: 'int', min: 10000, max: 600000 },
   triggerDeadlineMs: { type: 'int', min: 10000, max: 600000 },
   requirePageRelevance: { type: 'boolean' },
+  singleInstance: { type: 'boolean' },
 };
 
 const IDENTITY_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'company', 'country'];
