@@ -22,7 +22,7 @@ const { createObservability } = require('../src/observability');
 const { SeenLog, reconcile } = require('../src/reconciliation');
 const { blindReason } = require('../src/supervisorRules');
 const { validateConfig } = require('../src/validateConfig');
-const { acquireInstanceLock, releaseInstanceLock, lockPathFor } = require('../src/instanceLock');
+const { acquireInstanceLock, releaseInstanceLock, refreshInstanceLock, lockPathFor } = require('../src/instanceLock');
 const { loadConfig } = require('../src/loadConfig');
 const {
   zoomWebClientUrl,
@@ -1112,6 +1112,55 @@ check('instanceLock: re-acquiring your own lock is allowed', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock5-'));
   assert.ok(acquireInstanceLock(dir, { pid: process.pid }).ok);
   assert.ok(acquireInstanceLock(dir, { pid: process.pid }).ok, 'the same pid must not lock itself out');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('instanceLock: an unrefreshed lock expires even when its pid is alive', () => {
+  // The failure this prevents is specific and was hit for real: Windows recycles pids fast, so
+  // a hard-killed watcher leaves a lock whose number the OS later hands to some unrelated
+  // process. Judged on liveness alone, that lock looks held forever and no watcher can start
+  // again without someone deleting a file - the safeguard becoming an outage.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock6-'));
+  fs.writeFileSync(
+    lockPathFor(dir),
+    JSON.stringify({
+      pid: process.pid, // deliberately a pid that IS running
+      startedAt: '2026-01-01T00:00:00.000Z',
+      refreshedAt: new Date(Date.now() - 600000).toISOString(),
+    })
+  );
+
+  const result = acquireInstanceLock(dir, { pid: process.pid + 1, staleAfterMs: 120000 });
+  assert.ok(result.ok, 'a lock nobody is refreshing must not block startup forever');
+  assert.match(result.takeover.reason, /not been refreshed/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('instanceLock: a lock being refreshed is still respected', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock7-'));
+  acquireInstanceLock(dir, { pid: process.pid });
+  assert.ok(refreshInstanceLock(dir, { pid: process.pid }), 'the holder can refresh its own lock');
+
+  const second = acquireInstanceLock(dir, { pid: process.pid + 1, staleAfterMs: 120000 });
+  assert.strictEqual(second.ok, false, 'a live, freshly-refreshed lock must be honoured');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('instanceLock: only the holder may refresh', () => {
+  // Otherwise a departing process could keep stamping a lock it no longer owns, and the real
+  // holder would never be able to prove staleness.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock8-'));
+  acquireInstanceLock(dir, { pid: process.pid });
+  assert.strictEqual(refreshInstanceLock(dir, { pid: process.pid + 1 }), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('instanceLock: a lock from an older build without refreshedAt still expires', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock9-'));
+  // No refreshedAt at all - must fall back to startedAt rather than being immortal.
+  fs.writeFileSync(lockPathFor(dir), JSON.stringify({ pid: process.pid, startedAt: '2026-01-01T00:00:00.000Z' }));
+  const result = acquireInstanceLock(dir, { pid: process.pid + 1, staleAfterMs: 120000 });
+  assert.ok(result.ok);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

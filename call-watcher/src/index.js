@@ -16,7 +16,7 @@ const { createObservability } = require('./observability');
 const { checkChromeLaunchFlags } = require('./preflight');
 const { CallTabRegistry } = require('./callTabs');
 const { validateConfig } = require('./validateConfig');
-const { acquireInstanceLock, releaseInstanceLock } = require('./instanceLock');
+const { acquireInstanceLock, releaseInstanceLock, refreshInstanceLock } = require('./instanceLock');
 const { SeenLog, reconcile, formatReconciliation, seenPathFor } = require('./reconciliation');
 
 const config = loadConfig();
@@ -45,6 +45,10 @@ if (typeof WebSocket === 'undefined') {
 }
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
+// Distinct from a crash. A crash is worth retrying - a network blip, a Chrome restart. A
+// deliberate refusal (bad config, another watcher already running) will refuse identically
+// every time, so a supervisor must stop rather than loop. Named after sysexits.h's EX_CONFIG.
+const EXIT_REFUSED_TO_START = 78;
 const LOG_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const RECONNECT_DELAY_MS = 10000;
 const RETRY_BASE_DELAY_MS = 30000;
@@ -328,11 +332,11 @@ async function main() {
         'record the same call twice. Stop that one first, or delete data/watcher.lock if you are ' +
         'certain it is gone.'
     );
-    process.exit(1);
+    process.exit(EXIT_REFUSED_TO_START);
   }
   if (lock.warning) logger.warn(`Instance lock: ${lock.warning}`);
   if (lock.takeover) {
-    logger.warn(`Took over a stale instance lock from pid ${lock.takeover.pid} (started ${lock.takeover.startedAt}) - that process is no longer running.`);
+    logger.warn(`Took over a stale instance lock from pid ${lock.takeover.pid} (started ${lock.takeover.startedAt}) - ${lock.takeover.reason}.`);
   }
   const store = new StateStore(path.join(__dirname, '..', 'data', 'processed.json'), Number(config.stateRecordTtlDays ?? 7));
   const obs = createObservability(DATA_DIR, logger);
@@ -370,7 +374,7 @@ async function main() {
   if (!configCheck.ok) {
     for (const e of configCheck.errors) logger.error(`Config: ${e}`);
     logger.error('Refusing to start with an invalid config - fix the entries above in config.json or config.local.json.');
-    process.exit(1);
+    process.exit(EXIT_REFUSED_TO_START);
   }
 
   const flags = await checkChromeLaunchFlags(config.cdpUrl);
@@ -583,6 +587,9 @@ async function main() {
       seenLog = new SeenLog(DATA_DIR, logger);
     }
     seenLog.flush();
+    // Proves this process still holds the lock. Without it, a lock could only ever be cleared by
+    // a clean exit, so a hard kill would block every future start until someone deleted the file.
+    refreshInstanceLock(DATA_DIR);
 
     obs.heartbeat({
       rowsSeen: rows.length,

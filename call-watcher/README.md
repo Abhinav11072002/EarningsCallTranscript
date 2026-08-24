@@ -211,8 +211,14 @@ stops and says so, because a process that cannot start is a problem to fix, not 
 
 Only one watcher may run at a time (`data/watcher.lock`). Two sharing a Chrome and a data
 directory overwrite each other - `processed.json` is rewritten whole from memory, so
-last-write-wins can erase a claim and dispatch the same call twice. A lock left by a crash is
-detected and taken over automatically, so a hard kill never needs manual cleanup.
+last-write-wins can erase a claim and dispatch the same call twice. The holder refreshes the lock every poll,
+and a lock nobody is refreshing is taken over automatically - so a hard kill never needs manual
+cleanup. Checking the pid alone was not enough: Windows recycles pids quickly, and once the OS
+hands a dead watcher's number to an unrelated process, a pid-only lock looks held forever.
+
+On Windows a process killed with SIGTERM does not get to run its Node signal handlers, so a
+watcher stopped that way never releases its lock or prints its shutdown summary. The staleness
+rule covers the lock; use `npm run report` for the summary.
 
 ### Tests
 

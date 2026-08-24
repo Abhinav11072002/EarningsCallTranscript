@@ -37,6 +37,8 @@ const GRACE_AFTER_START_MS = 90000;
 const RESTART_DELAY_MS = 5000;
 // A crash loop is a real failure, not something to paper over. If the child cannot stay up this
 // many times inside the window, stop and leave the reason on disk.
+// Matches EXIT_REFUSED_TO_START in src/index.js.
+const EXIT_REFUSED_TO_START = 78;
 const MAX_RESTARTS_IN_WINDOW = 5;
 const RESTART_WINDOW_MS = 10 * 60000;
 
@@ -75,6 +77,13 @@ function start() {
   child.on('exit', (code, signal) => {
     child = null;
     if (stopping) return;
+    // A refusal is a decision, not a fault: the watcher inspected its config or found another
+    // instance and declined. Restarting just reprints the same message every five seconds and
+    // buries the one line that explains what to fix.
+    if (code === EXIT_REFUSED_TO_START) {
+      log('ERROR', 'The watcher refused to start (see its message above). Not retrying - this needs a fix, not another attempt.');
+      process.exit(1);
+    }
     log('WARN', `Watcher exited (code ${code}, signal ${signal || 'none'}).`);
     scheduleRestart();
   });
