@@ -44,7 +44,7 @@ function createObservability(dataDir, logger) {
 
     // Called every poll. `health` carries what an external watchdog needs to judge liveness
     // without parsing logs: staleness of this file, plus whether the table is still readable.
-    heartbeat({ rowsSeen, withLinks, dueNow, queueDepth, openCallTabs, streamReadFailures = 0, chromeConnected }) {
+    heartbeat({ rowsSeen, withLinks, parseableTimes = null, dueNow, queueDepth, openCallTabs, streamReadFailures = 0, chromeConnected }) {
       counters.pollCount++;
       safeWrite(() => {
         fs.writeFileSync(
@@ -57,6 +57,7 @@ function createObservability(dataDir, logger) {
               pollCount: counters.pollCount,
               rowsSeen,
               withLinks,
+              parseableTimes,
               dueNow,
               queueDepth,
               openCallTabs,
@@ -67,6 +68,9 @@ function createObservability(dataDir, logger) {
               warnings: {
                 noRows: rowsSeen === 0,
                 noLinks: rowsSeen > 0 && withLinks === 0,
+                // Rows and links present, but no readable Transcription Time: nothing can
+                // ever become due, and every other signal here looks perfectly healthy.
+                noReadableTimes: withLinks > 0 && parseableTimes === 0,
                 queueBacklog: queueDepth > 3,
                 // Tabs are closed when their call completes; a climbing count means completion
                 // is not being observed, which is how Chrome ends up out of memory over days.

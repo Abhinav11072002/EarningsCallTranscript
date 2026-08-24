@@ -171,11 +171,6 @@ async function describeJoinBlocker(page) {
   return null;
 }
 
-// Exposed so the gauntlet can assert the healthy-wait states are NOT treated as blockers.
-async function isLegitimateWait(page) {
-  return Boolean(await matchVisibleText(page, LEGITIMATE_WAIT_PATTERN));
-}
-
 // Walks the browser-entry interstitials until the call itself is reached. Bounded, and every
 // step is logged: a provider that changes its wording should surface as an unhandled pre-join
 // screen in the log rather than as a silently mis-targeted capture.
@@ -242,7 +237,6 @@ async function advanceJoinFlow(page, logger) {
 module.exports = {
   advanceJoinFlow,
   describeJoinBlocker,
-  isLegitimateWait,
   TERMINAL_STATE_PATTERN,
   LEGITIMATE_WAIT_PATTERN,
   findBrowserEntryAction,

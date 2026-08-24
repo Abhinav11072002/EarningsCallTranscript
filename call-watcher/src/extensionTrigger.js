@@ -107,12 +107,6 @@ function streamMatchesRow(streams, row) {
   return (streams || []).some((s) => s && s.symbol === row.symbol && s.year === year && s.period === period);
 }
 
-// Kept for the standalone diagnostic scripts; the poll loop uses getActiveStreams +
-// streamMatchesRow so it only pays for one read per poll.
-async function hasActiveStream(context, config, row) {
-  return streamMatchesRow(await getActiveStreams(context, config), row);
-}
-
 // Confirmed by direct testing (scripts/diagnose-popup.js): the popup opens visibly and is
 // listed by Chrome's own /json/list HTTP endpoint, but Playwright's context.pages()/'page'
 // event NEVER sees it - its auto-attach mechanism doesn't reach this target, most likely
@@ -438,7 +432,6 @@ module.exports = {
   assertPageLooksRelevant,
   triggerExtension,
   splitFiscalPeriod,
-  hasActiveStream,
   getActiveStreams,
   streamMatchesRow,
 };

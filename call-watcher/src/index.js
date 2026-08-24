@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { loadConfig } = require('./loadConfig');
 const { StateStore } = require('./stateStore');
-const { extractRows, minutesUntilCall, rowKey } = require('./tableWatcher');
+const { extractRows, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('./tableWatcher');
 const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
@@ -15,6 +15,9 @@ const { resolveLogPath, pruneOldLogFiles } = require('./logRotation');
 const { createObservability } = require('./observability');
 const { checkChromeLaunchFlags } = require('./preflight');
 const { CallTabRegistry } = require('./callTabs');
+const { validateConfig } = require('./validateConfig');
+const { acquireInstanceLock, releaseInstanceLock } = require('./instanceLock');
+const { SeenLog, reconcile, formatReconciliation, seenPathFor } = require('./reconciliation');
 
 const config = loadConfig();
 
@@ -87,16 +90,13 @@ function makeLogger() {
   };
 }
 
-// Each due call's whole pipeline (resolve webcast link -> fill registration form -> trigger
-// extension) runs one at a time, front-to-back, through this queue - not just the
-// extension-trigger step. Two reasons: (1) the extension's popup auto-closes as soon as its
-// tab loses focus, so triggerExtension() needs exclusive control of "which tab is active"
-// for its duration anyway; (2) webcast pages and registration forms vary a lot in layout, and
-// formFiller.js's field-matching is a best-effort heuristic - running several unfamiliar pages
-// at once makes a mis-fill on one call easy to miss in the interleaved logs. Serializing keeps
-// each call's outcome easy to see and verify before the next one starts. If simultaneous calls
-// ever back up meaningfully behind this queue, that's a sign to reconsider - but correctness
-// per call matters more here than throughput.
+// Serializes whole BATCHES, so two overlapping polls can never interleave their trigger
+// phases. Within a batch, preparation runs in parallel and only the trigger is exclusive -
+// concurrency.js explains why that split is safe and why the trigger cannot be shared.
+//
+// queuedPipelines therefore counts batches in flight, not individual calls. Its one job is to
+// keep the extension-storage read (which opens a tab, and an opening tab kills a live popup)
+// away from a batch that is mid-trigger.
 let pipelineQueue = Promise.resolve();
 let queuedPipelines = 0;
 function withPipelineLock(fn) {
@@ -175,13 +175,21 @@ async function prepareCall(context, portalPage, row, key, logger) {
         // Reassigned, not just awaited: an entry link with target=_blank opens the call in its
         // own tab, and capture is per-tab - continuing with the old handle would record the lobby.
         page = await advanceJoinFlow(page, logger);
-        resolvedUrl = page.url();
-        const registration = await fillRegistrationForm(page, config.dummyIdentity, logger);
-        // The form filler may have followed the call into a new tab, same as the join flow.
+        // The callback keeps `page` current even if the form filler throws mid-way: it can
+        // follow the call into a new tab and close the old one, and the catch below must clean
+        // up the tab we actually hold, not the one we started with.
+        const registration = await fillRegistrationForm(page, config.dummyIdentity, logger, (adopted) => {
+          page = adopted;
+        });
         if (registration.page) page = registration.page;
         // ...and again afterwards: a registration step can hand back a second client choice, and
         // Zoom's web client re-renders into the meeting only once the name form is submitted.
         page = await advanceJoinFlow(page, logger);
+        // Read LAST, not before the form step. resolvedUrl is the field the ledger uses to
+        // answer "was this the right page?", and registration can navigate - or follow the call
+        // into an entirely different tab - after the earlier reading was taken. Recording the
+        // pre-form URL made the ledger describe a page that was never captured.
+        resolvedUrl = page.url();
         if (registration.pending) {
           const detail = registration.error ? `: ${registration.error}` : '';
           throw new Error(`Registration gate still appears active after filling and submission attempts${detail}`);
@@ -210,7 +218,9 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
     // still cross its start time while earlier calls in the batch are being triggered - and the
     // rule is that an attempt begins before the call does, not that it was merely queued in
     // time. Cheap to check, and the alternative is a transcript missing the opening remarks.
-    const minsLeftNow = minutesUntilCall(row);
+    // minutesRemaining, not minutesUntilCall: the latter re-parses the countdown TEXT, which
+    // was frozen at scrape time, so this guard silently never fired. See tableWatcher.stampDueAt.
+    const minsLeftNow = minutesRemaining(row);
     if (minsLeftNow !== null && minsLeftNow <= 0) {
       throw new Error(
         `Call started ${Math.abs(minsLeftNow).toFixed(1)} min ago while it was queued for the trigger - not joining late`
@@ -303,9 +313,33 @@ function runBatch(context, portalPage, batch, store, logger, obs, callTabs) {
 
 async function main() {
   const logger = makeLogger();
+
+  // First thing, before touching Chrome or the state files. Two watchers sharing one Chrome and
+  // one data directory corrupt each other: processed.json is rewritten whole from memory, so
+  // last-write-wins can erase a claim and dispatch the same call twice, and the extension popup
+  // is a single global resource that the batch pipeline already serializes carefully within one
+  // process. Observed during testing - two were running and the heartbeat described whichever
+  // wrote last.
+  const lock = acquireInstanceLock(DATA_DIR);
+  if (!lock.ok) {
+    logger.error(
+      `Another call-watcher is already running (pid ${lock.holder.pid}, started ${lock.holder.startedAt}). ` +
+        'Two watchers on the same Chrome and data directory overwrite one another and can ' +
+        'record the same call twice. Stop that one first, or delete data/watcher.lock if you are ' +
+        'certain it is gone.'
+    );
+    process.exit(1);
+  }
+  if (lock.warning) logger.warn(`Instance lock: ${lock.warning}`);
+  if (lock.takeover) {
+    logger.warn(`Took over a stale instance lock from pid ${lock.takeover.pid} (started ${lock.takeover.startedAt}) - that process is no longer running.`);
+  }
   const store = new StateStore(path.join(__dirname, '..', 'data', 'processed.json'), Number(config.stateRecordTtlDays ?? 7));
   const obs = createObservability(DATA_DIR, logger);
   const callTabs = new CallTabRegistry(logger);
+  // Independent record of every row observed, so the end-of-day report can name calls that
+  // never produced a ledger entry at all - the failures nothing else can see.
+  let seenLog = new SeenLog(DATA_DIR, logger);
 
   let browser;
   let context;
@@ -327,6 +361,18 @@ async function main() {
   }
   logger.info(`Portal tab URL: ${portalPage.url()}`);
 
+  // Validated after the logger exists so the findings reach the log file, not just a terminal
+  // that may be closed by the time anyone looks. Errors stop the run: every numeric setting is
+  // read as `config.x ?? default`, so a bad or misspelled one does not fail - it silently
+  // substitutes a different value and the day proceeds under rules nobody chose.
+  const configCheck = validateConfig(config);
+  for (const w of configCheck.warnings) logger.warn(`Config: ${w}`);
+  if (!configCheck.ok) {
+    for (const e of configCheck.errors) logger.error(`Config: ${e}`);
+    logger.error('Refusing to start with an invalid config - fix the entries above in config.json or config.local.json.');
+    process.exit(1);
+  }
+
   const flags = await checkChromeLaunchFlags(config.cdpUrl);
   if (flags.status === 'missing-capture-flag') {
     logger.error(
@@ -340,6 +386,19 @@ async function main() {
     logger.warn(`Could not verify Chrome's launch flags: ${flags.detail || 'unknown reason'}`);
   } else {
     logger.info('Preflight: Chrome has --auto-accept-this-tab-capture.');
+  }
+
+  // Claims can only be live while the process that made them is alive, and none is at
+  // startup - so anything still claimed was abandoned by a crash or a Ctrl+C mid-batch. Left
+  // alone, retryDue() would refuse it for 30 minutes, which under the no-late-attempts rule
+  // means the call is simply lost. Released BEFORE the revival below so a claim that has also
+  // exhausted its attempts gets both treatments.
+  const released = store.releaseStaleClaims();
+  for (const r of released) {
+    logger.warn(
+      `Releasing an abandoned claim for ${r.key} (claimed ${r.claimedAt}, attempt ${r.attempts}) - ` +
+        'the previous run exited while it was being processed.'
+    );
   }
 
   // A restart is an explicit decision to try again - see StateStore.resetExhaustedFailures.
@@ -410,14 +469,46 @@ async function main() {
     // Pass 1: decide which rows are actionable, without touching Chrome. Collecting them
     // first lets us read the extension's stream list once for the whole poll instead of once
     // per row, and lets us act on the most urgent call first.
-    const retryWindowMinutes = Number(config.retryWindowMinutes ?? 5);
+    // Matches config.json. It read 5 here, so a missing key silently shrank the post-start
+    // reconciliation window by 24x - long enough to stop noticing that live calls had ended.
+    const retryWindowMinutes = Number(config.retryWindowMinutes ?? 120);
     const lateStartGraceMinutes = Number(config.lateStartGraceMinutes ?? 0);
     const dueRows = [];
+    let parseableTimes = 0;
+    let linkedRows = 0;
     for (const row of rows) {
-      if (!row.dialinLink) continue;
+      // Deliberately observed BEFORE the no-link skip below, so a row that never gets a
+      // dial-in link is still on the record rather than vanishing from the day entirely.
+      if (!row.dialinLink) {
+        seenLog.observe({
+          key: rowKey(row),
+          symbol: row.symbol,
+          fiscalPeriod: row.fiscalPeriod,
+          earningsDate: row.earningsDate,
+          hasLink: false,
+          timeParsed: minutesUntilCall(row) !== null,
+          insideWindow: false,
+        });
+        continue;
+      }
+      linkedRows++;
 
       const key = rowKey(row);
       const minsLeft = minutesUntilCall(row);
+      seenLog.observe({
+        key,
+        symbol: row.symbol,
+        fiscalPeriod: row.fiscalPeriod,
+        earningsDate: row.earningsDate,
+        hasLink: Boolean(row.dialinLink),
+        timeParsed: minsLeft !== null,
+        insideWindow: minsLeft !== null && minsLeft <= config.thresholdMinutes,
+      });
+      if (minsLeft !== null) {
+        parseableTimes++;
+        // Freeze the countdown into an absolute instant now, while the text is fresh.
+        stampDueAt(row, minsLeft);
+      }
       if (minsLeft === null) {
         const warnKey = `${key}|${row.transcriptionTimeText}`;
         if (!warnedUnparseable.has(warnKey)) {
@@ -463,6 +554,18 @@ async function main() {
       dueRows.push({ row, key, record, minsLeft });
     }
 
+    // The third way to be blind, and the only one that had no alarm. Zero rows and zero links
+    // are already escalated above; "plenty of rows, plenty of links, and not one readable time"
+    // is what a change to the Transcription Time format looks like, and it is indistinguishable
+    // from a quiet day: every row warns once, then nothing ever becomes due again, all day.
+    if (linkedRows > 0 && parseableTimes === 0) {
+      logger.error(
+        `Table produced ${linkedRows} row(s) with dial-in links but NOT ONE readable ` +
+          'Transcription Time - the time format has probably changed. No call can become due ' +
+          'in this state. See tableWatcher.js (parseCountdownToMinutes / parseAbsoluteDateTimeToMinutes).'
+      );
+    }
+
     // Close tabs whose call is over. Without this every successful call leaves a tab holding a
     // live capture for as long as the process runs - fine for an afternoon, fatal over days.
     // `completed` is set by the reconciliation below; the age cap catches calls whose ending we
@@ -472,9 +575,19 @@ async function main() {
       Number(config.maxCallTabMinutes ?? 180) * 60000
     );
 
+    // One write per poll, not one per row. Also re-created if the day has rolled over, so a
+    // process left running overnight starts a fresh day's record instead of appending to
+    // yesterday's.
+    if (seenLog.filePath !== seenPathFor(DATA_DIR)) {
+      seenLog.flush(); // close out yesterday before switching files
+      seenLog = new SeenLog(DATA_DIR, logger);
+    }
+    seenLog.flush();
+
     obs.heartbeat({
       rowsSeen: rows.length,
       withLinks,
+      parseableTimes,
       dueNow: dueRows.length,
       queueDepth: queuedPipelines,
       openCallTabs: callTabs.size(),
@@ -654,6 +767,7 @@ process.on('uncaughtException', (err) => {
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     fatalLogger.info(`Received ${signal}; shutting down. Tabs already opened for in-flight calls are left open.`);
+    releaseInstanceLock(DATA_DIR);
     // Print the day's tally on the way out so stopping the watcher leaves a checkable record
     // rather than an impression. Read back from the ledger, so it is correct across restarts.
     try {
@@ -668,6 +782,10 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
       for (const s of summary.skippedLate) fatalLogger.info(`  MISSED  ${s.at} ${s.label} (${s.minsPastStart} min past start)`);
       const late = summary.started.filter((s) => (s.lateBySec ?? 0) > 60);
       for (const s of late) fatalLogger.info(`  LATE    ${s.label} started ${s.lateBySec}s after the scheduled time`);
+      // The ledger only knows about calls that produced an attempt. This adds the ones that
+      // did not - a row that never got a link, never parsed a time, or reached the window and
+      // left no trace at all. Those are the losses nothing else in the system can report.
+      for (const line of formatReconciliation(reconcile(DATA_DIR))) fatalLogger.info(line);
     } catch (err) {
       fatalLogger.warn(`Could not produce the daily summary: ${err.message}`);
     }

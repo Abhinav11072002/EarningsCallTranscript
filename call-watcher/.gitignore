@@ -16,6 +16,8 @@ test/fixtures/captured/
 # state. All machine- and run-specific; regenerated automatically.
 data/heartbeat.json
 data/outcomes-*.jsonl
+data/seen-*.json
+data/watcher.lock
 
 # Ad-hoc diagnostic scratch files
 *.tmp.js

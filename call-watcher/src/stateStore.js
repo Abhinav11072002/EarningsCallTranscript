@@ -161,6 +161,33 @@ class StateStore {
     return reset;
   }
 
+  // Releases claims left behind by a process that is no longer running.
+  //
+  // A claim means "a pipeline is working on this right now". It is checked by retryDue(), which
+  // refuses to re-dispatch a claimed row for 30 minutes so two pipelines cannot process the
+  // same call. That is right while the process is alive - and wrong the moment it is not: if
+  // the watcher is killed or crashes mid-batch, the claim outlives the pipeline that made it
+  // and blocks the retry for half an hour. Combined with the rule that an attempt must begin
+  // before the call starts, that is not a delay, it is a lost call.
+  //
+  // Only ever called at startup, where the reasoning is airtight: no pipeline of ours can be
+  // in flight before main() has begun, so every claim on disk is by definition abandoned.
+  releaseStaleClaims() {
+    const released = [];
+    for (const [key, record] of this.records) {
+      if (record.status !== 'claimed') continue;
+      released.push({ key, attempts: record.attempts, claimedAt: record.updatedAt });
+      // Kept as a failure rather than deleted: deleting would reset the attempt counter (the
+      // defect that once let a call retry ~200 times), and the attempt genuinely was made.
+      record.status = 'failed';
+      record.lastError = 'process exited while this call was being processed';
+      delete record.nextAttemptAt;
+      record.updatedAt = new Date().toISOString();
+    }
+    if (released.length) this._save();
+    return released;
+  }
+
   remove(key) {
     if (!this.records.delete(key)) return;
     this._save();

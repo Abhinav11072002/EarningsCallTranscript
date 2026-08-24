@@ -219,4 +219,28 @@ function rowKey(row) {
   return `${row.symbol}|${row.fiscalPeriod}|${row.earningsDate}`;
 }
 
-module.exports = { extractRows, minutesUntilCall, rowKey, parseCountdownToMinutes };
+// Converts the scraped countdown into an ABSOLUTE instant, once, and remembers it on the row.
+//
+// This matters because transcriptionTimeText is a snapshot: "2 min 30 sec" is what the cell
+// said at the moment it was scraped, and re-reading it later yields 2.5 minutes forever.
+// Anything that re-checks the clock further down the pipeline - the trigger's own last-moment
+// lateness guard, most importantly - was therefore comparing against a frozen value and could
+// never fire. Verified directly: minutesUntilCall on the same row returned 2.5 before and after
+// a two-second wait.
+//
+// The absolute-datetime format did not have this problem (it is computed against Date.now()
+// every time), which is exactly why the bug was easy to miss: it only affected the countdown
+// format, which is the only format a call inside the window ever uses.
+function stampDueAt(row, minsLeft, now = Date.now()) {
+  row.dueAt = now + minsLeft * 60000;
+  return row;
+}
+
+// Minutes until the call, from the stamped instant where one exists. Falls back to re-parsing
+// the text so a row that never went through stampDueAt still behaves as it always did.
+function minutesRemaining(row, now = Date.now()) {
+  if (typeof row.dueAt === 'number' && Number.isFinite(row.dueAt)) return (row.dueAt - now) / 60000;
+  return minutesUntilCall(row);
+}
+
+module.exports = { extractRows, minutesUntilCall, rowKey, parseCountdownToMinutes, stampDueAt, minutesRemaining };

@@ -182,9 +182,43 @@ cd call-watcher
 npm install
 ```
 
+### Knowing nothing was lost
+
+`npm run report` answers the question the log cannot. The outcomes ledger records what was
+*attempted*; it is silent about calls that never became an attempt at all - a row whose time
+never parsed, a row that never got a dial-in link, or a row that reached the window and
+produced no entry whatsoever. A day where twenty calls silently never became due reads, in the
+ledger alone, exactly like a quiet day.
+
+So `data/seen-YYYY-MM-DD.json` independently records every row the watcher observed, and the
+report reconciles the two. Every call lands in exactly one bucket and the buckets sum to the
+total - if they ever do not, the report is wrong and says so rather than quietly under-counting:
+
+```
+Reconciliation for 2026-08-24: 199 call(s) observed | recorded=1 failed=1 missed-late=0
+  unaccounted=0 no-link=53 unreadable-time=0 not-due-today=144
+```
+
+`unaccounted` is the bucket this exists for: a call that entered the window with a usable link
+and left no trace. It should always be zero. The report exits non-zero when it is not, so it
+can be run from a scheduled task rather than only read by eye. The same block is printed on
+Ctrl+C.
+
+`npm run supervise` runs the watcher under a supervisor that restarts it if it exits, and also
+if it is running but blind - a stale heartbeat, a disconnected Chrome, an expired portal
+session, a table with no readable times. Restarts are rate-limited: five in ten minutes and it
+stops and says so, because a process that cannot start is a problem to fix, not to paper over.
+
+Only one watcher may run at a time (`data/watcher.lock`). Two sharing a Chrome and a data
+directory overwrite each other - `processed.json` is rewritten whole from memory, so
+last-write-wins can erase a claim and dispatch the same call twice. A lock left by a crash is
+detected and taken over automatically, so a hard kill never needs manual cleanup.
+
 ### Tests
 
 ```powershell
+npm run supervise        # like npm start, but restarts on death OR on a blind heartbeat
+npm run report           # "did we get everything today?" - safe to run while it is watching
 npm test                 # everything: unit, then the four browser suites
 npm run test:unit        # pure logic - no browser needed, ~1s
 npm run test:registration

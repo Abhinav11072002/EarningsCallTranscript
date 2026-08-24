@@ -548,7 +548,7 @@ async function findRegistrationError(page) {
 //    already logged into a Q4 account - clicking "Register with a Q4 Account" then "Register
 //    for event" is enough, sometimes across more than one screen, no typing needed).
 // Logs everything it does so unrecognized/unhandled pages are visible rather than silent.
-async function fillRegistrationForm(page, identity, logger) {
+async function fillRegistrationForm(page, identity, logger, onPageChanged) {
   // Registration forms/buttons often render in client-side after domcontentloaded, so an
   // immediate query can race the page and find nothing even when a gate exists.
   await waitForRegistrationSurface(page);
@@ -587,6 +587,11 @@ async function fillRegistrationForm(page, identity, logger) {
       // stop here and the next step re-query against the tab we now hold.
       if (outcome.page !== page) {
         page = outcome.page;
+        // Reported the instant it happens, not only on the way out. If this function throws
+        // after adopting a popup, the caller is otherwise still holding the ORIGINAL page -
+        // which clickAndAdoptPopup has already closed - so its cleanup closes a dead handle and
+        // the adopted tab is orphaned, live and unwatched, for the rest of the run.
+        if (onPageChanged) onPageChanged(page);
         break;
       }
     }
@@ -621,4 +626,4 @@ async function fillRegistrationForm(page, identity, logger) {
   return { foundAny, pending, error: pending ? error : null, page };
 }
 
-module.exports = { fillRegistrationForm, matchField, hasUnsolvableChallenge };
+module.exports = { fillRegistrationForm, matchField };

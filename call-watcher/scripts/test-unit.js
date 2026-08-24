@@ -12,13 +12,18 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { parseCountdownToMinutes, minutesUntilCall, rowKey } = require('../src/tableWatcher');
+const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('../src/tableWatcher');
 const { StateStore } = require('../src/stateStore');
 const { shouldSkipAsLate } = require('../src/dispatchRules');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow } = require('../src/extensionTrigger');
 const { createObservability } = require('../src/observability');
+const { SeenLog, reconcile } = require('../src/reconciliation');
+const { blindReason } = require('../src/supervisorRules');
+const { validateConfig } = require('../src/validateConfig');
+const { acquireInstanceLock, releaseInstanceLock, lockPathFor } = require('../src/instanceLock');
+const { loadConfig } = require('../src/loadConfig');
 const {
   zoomWebClientUrl,
   NATIVE_APP_PATTERN,
@@ -770,6 +775,344 @@ checkAsync('runPreparedBatch: a single call behaves exactly as it always did', a
     },
   });
   assert.deepStrictEqual(steps, ['prepare:SOLO', 'trigger:SOLO']);
+});
+
+// ---------------------------------------------------------------- frozen countdowns
+
+// transcriptionTimeText is a SNAPSHOT. Re-reading it later yields the value it had when it was
+// scraped, forever - which is why the trigger's last-moment lateness guard silently never
+// fired. Anything that re-checks the clock must go through the stamped instant instead.
+
+check('tableWatcher: minutesUntilCall is frozen, minutesRemaining is not', () => {
+  const row = { transcriptionTimeText: '2 min 30 sec' };
+  const t0 = 1_000_000_000_000;
+  approx(minutesUntilCall(row), 2.5);
+
+  stampDueAt(row, minutesUntilCall(row), t0);
+  approx(minutesRemaining(row, t0), 2.5);
+  // 90 seconds later the countdown TEXT still says 2 min 30 sec...
+  approx(minutesUntilCall(row), 2.5);
+  // ...but the stamped instant has moved.
+  approx(minutesRemaining(row, t0 + 90_000), 1.0);
+  // And it goes negative once the call has started, which is what the guard depends on.
+  assert.ok(minutesRemaining(row, t0 + 200_000) < 0, 'must go negative after the call starts');
+});
+
+check('tableWatcher: an unstamped row still behaves exactly as before', () => {
+  // The fallback path: nothing that skipped stampDueAt should change behaviour.
+  approx(minutesRemaining({ transcriptionTimeText: '45 min' }), 45);
+  assert.strictEqual(minutesRemaining({ transcriptionTimeText: 'gibberish' }), null);
+  // A malformed stamp must not be trusted over the text.
+  approx(minutesRemaining({ transcriptionTimeText: '10 min', dueAt: NaN }), 10);
+});
+
+// ---------------------------------------------------------------- abandoned claims
+
+check('stateStore: claims abandoned by a dead process are released at startup', () => {
+  // A claim says "a pipeline is working on this". retryDue() honours that for 30 minutes so two
+  // pipelines cannot take the same call - correct while the process lives, and a lost call when
+  // it does not, because an attempt must now begin before the call starts.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-claims-'));
+  const file = path.join(dir, 'processed.json');
+  const store = new StateStore(file);
+
+  store.claim('STUCK|2026Q1|2026-08-24');
+  store.claim('ALSOSTUCK|2026Q1|2026-08-24');
+  store.claim('LIVE|2026Q1|2026-08-24');
+  store.markStarted('LIVE|2026Q1|2026-08-24');
+  store.claim('DONE|2026Q1|2026-08-24');
+  store.markCompleted('DONE|2026Q1|2026-08-24', 'finished');
+
+  assert.strictEqual(store.retryDue('STUCK|2026Q1|2026-08-24'), false, 'a fresh claim blocks retry');
+
+  const released = store.releaseStaleClaims();
+  assert.deepStrictEqual(released.map((r) => r.key).sort(), ['ALSOSTUCK|2026Q1|2026-08-24', 'STUCK|2026Q1|2026-08-24']);
+  assert.strictEqual(store.retryDue('STUCK|2026Q1|2026-08-24'), true, 'released claims must be retryable at once');
+
+  // The attempt count survives: deleting the record instead would restart the series and
+  // re-enable the ~200-retry defect this codebase already had once.
+  assert.strictEqual(store.get('STUCK|2026Q1|2026-08-24').attempts, 1);
+  assert.match(store.get('STUCK|2026Q1|2026-08-24').lastError, /process exited/);
+
+  // A live capture and a finished call must be left completely alone.
+  assert.strictEqual(store.get('LIVE|2026Q1|2026-08-24').status, 'started');
+  assert.strictEqual(store.get('DONE|2026Q1|2026-08-24').status, 'completed');
+
+  // Survives the reload, or the next start would report the same claims again.
+  assert.strictEqual(new StateStore(file).get('STUCK|2026Q1|2026-08-24').status, 'failed');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('stateStore: releasing with nothing claimed is a no-op', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-claims2-'));
+  const store = new StateStore(path.join(dir, 'processed.json'));
+  assert.deepStrictEqual(store.releaseStaleClaims(), []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- reconciliation
+
+// The ledger records what was ATTEMPTED. This covers what was not: a row with no link, a row
+// whose time never parsed, and above all a row that reached the window and produced no ledger
+// entry whatsoever. That last one is invisible everywhere else in the system - a day where
+// twenty calls silently never became due reads exactly like a quiet day.
+function withDay(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-recon-'));
+  const quiet = { info() {}, warn() {}, error() {} };
+  try {
+    return fn(dir, quiet);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+check('reconciliation: every observed call lands in exactly one bucket', () => {
+  withDay((dir, quiet) => {
+    const seen = new SeenLog(dir, quiet);
+    const row = (symbol, opts) =>
+      seen.observe({
+        key: `${symbol}|2026Q2|2026-08-24`,
+        symbol,
+        fiscalPeriod: '2026Q2',
+        earningsDate: '2026-08-24',
+        hasLink: true,
+        timeParsed: true,
+        insideWindow: true,
+        ...opts,
+      });
+    row('GOOD');
+    row('BROKE');
+    row('TOOLATE');
+    row('NOLINK', { hasLink: false, insideWindow: false });
+    row('NOTIME', { timeParsed: false, insideWindow: false });
+    row('GHOST');                               // reached the window, no ledger entry at all
+    row('TOMORROW', { insideWindow: false });   // seen, but never due today
+    seen.flush();
+
+    const obs = createObservability(dir, quiet);
+    obs.recordOutcome({ status: 'started', symbol: 'GOOD', fiscalPeriod: '2026Q2' });
+    obs.recordOutcome({ status: 'failed', symbol: 'BROKE', fiscalPeriod: '2026Q2', error: 'gate still active' });
+    obs.recordOutcome({ status: 'skipped-late', symbol: 'TOOLATE', fiscalPeriod: '2026Q2', reason: 'never attempted' });
+
+    const r = reconcile(dir);
+    assert.deepStrictEqual(r.recorded.map((x) => x.label), ['GOOD 2026Q2']);
+    assert.deepStrictEqual(r.failed.map((x) => x.label), ['BROKE 2026Q2']);
+    assert.deepStrictEqual(r.missedLate.map((x) => x.label), ['TOOLATE 2026Q2']);
+    assert.deepStrictEqual(r.noDialinLink.map((x) => x.label), ['NOLINK 2026Q2']);
+    assert.deepStrictEqual(r.noReadableTime.map((x) => x.label), ['NOTIME 2026Q2']);
+    assert.deepStrictEqual(r.unaccounted.map((x) => x.label), ['GHOST 2026Q2'], 'the bucket this report exists for');
+    assert.deepStrictEqual(r.notDueToday.map((x) => x.label), ['TOMORROW 2026Q2']);
+
+    // The invariant: buckets are disjoint and complete. If this ever fails, the report lies.
+    const counted = ['recorded', 'failed', 'missedLate', 'noDialinLink', 'noReadableTime', 'unaccounted', 'notDueToday']
+      .reduce((sum, b) => sum + r[b].length, 0);
+    assert.strictEqual(counted, r.totalSeen, 'every seen call must be in exactly one bucket');
+  });
+});
+
+check('reconciliation: a call that failed then succeeded counts as recorded, once', () => {
+  withDay((dir, quiet) => {
+    const seen = new SeenLog(dir, quiet);
+    seen.observe({
+      key: 'RETRY|2026Q2|2026-08-24', symbol: 'RETRY', fiscalPeriod: '2026Q2',
+      earningsDate: '2026-08-24', hasLink: true, timeParsed: true, insideWindow: true,
+    });
+    seen.flush();
+    const obs = createObservability(dir, quiet);
+    obs.recordOutcome({ status: 'failed', symbol: 'RETRY', fiscalPeriod: '2026Q2', error: 'first try' });
+    obs.recordOutcome({ status: 'started', symbol: 'RETRY', fiscalPeriod: '2026Q2' });
+
+    const r = reconcile(dir);
+    assert.deepStrictEqual(r.recorded.map((x) => x.label), ['RETRY 2026Q2']);
+    assert.strictEqual(r.failed.length, 0, 'a recovered call must not also be reported as failed');
+  });
+});
+
+check('reconciliation: sticky flags survive a row leaving the table', () => {
+  withDay((dir, quiet) => {
+    const seen = new SeenLog(dir, quiet);
+    const base = { key: 'K|2026Q2|2026-08-24', symbol: 'K', fiscalPeriod: '2026Q2', earningsDate: '2026-08-24' };
+    // Seen early with no link and a distant time...
+    seen.observe({ ...base, hasLink: false, timeParsed: true, insideWindow: false });
+    // ...then inside the window with a link...
+    seen.observe({ ...base, hasLink: true, timeParsed: true, insideWindow: true });
+    // ...then the portal drops the row's link once the call starts.
+    seen.observe({ ...base, hasLink: false, timeParsed: false, insideWindow: false });
+    seen.flush();
+    // It must still be judged as having reached the window with a usable link, or a call that
+    // vanishes from the table after starting would be excused as never having been due.
+    const r = reconcile(dir);
+    assert.deepStrictEqual(r.unaccounted.map((x) => x.label), ['K 2026Q2']);
+  });
+});
+
+check('reconciliation: an empty day reports nothing rather than throwing', () => {
+  withDay((dir) => {
+    const r = reconcile(dir);
+    assert.strictEqual(r.totalSeen, 0);
+    assert.deepStrictEqual(r.unaccounted, []);
+  });
+});
+
+// ---------------------------------------------------------------- supervisor
+
+check('supervisor: restarts only on states where the watcher cannot do its job', () => {
+  const fresh = (over) => ({ pid: 42, updatedAt: new Date().toISOString(), warnings: {}, ...over });
+  assert.strictEqual(blindReason(fresh(), { pid: 42 }), null, 'a healthy watcher must be left alone');
+  // No heartbeat yet is the start grace's problem - killing a booting process never terminates.
+  assert.strictEqual(blindReason(null, { pid: 42 }), null);
+  // A heartbeat from a PREVIOUS run says nothing about this child.
+  assert.strictEqual(blindReason(fresh({ pid: 7, warnings: { noRows: true } }), { pid: 42 }), null);
+
+  const cases = [
+    ['chromeDisconnected', /Chrome is disconnected/],
+    ['noRows', /zero rows/],
+    ['noLinks', /zero dial-in links/],
+    ['noReadableTimes', /Transcription Time/],
+    ['cannotReadStreams', /stream list/],
+  ];
+  for (const [flag, expected] of cases) {
+    assert.match(blindReason(fresh({ warnings: { [flag]: true } }), { pid: 42 }), expected, flag);
+  }
+});
+
+check('supervisor: a stopped poll loop is caught by heartbeat age', () => {
+  const stale = { pid: 42, updatedAt: new Date(Date.now() - 600000).toISOString(), warnings: {} };
+  assert.match(blindReason(stale, { pid: 42, staleAfterMs: 300000 }), /heartbeat is \d+s old/);
+  // Just inside the limit is fine - a slow batch must not be mistaken for a dead loop.
+  const recent = { pid: 42, updatedAt: new Date(Date.now() - 60000).toISOString(), warnings: {} };
+  assert.strictEqual(blindReason(recent, { pid: 42, staleAfterMs: 300000 }), null);
+  // A garbled timestamp must not read as infinitely old and cause a restart loop.
+  assert.strictEqual(blindReason({ pid: 42, updatedAt: 'not-a-date', warnings: {} }, { pid: 42 }), null);
+});
+
+// ---------------------------------------------------------------- config validation
+
+// Every numeric setting is read as `config.x ?? default`, so a typo is not an error - it is
+// silently the default, and the day runs under rules nobody chose.
+const BASE_CONFIG = {
+  portalUrl: 'https://admin.example.com/?section=x',
+  cdpUrl: 'http://127.0.0.1:9222',
+  extensionShortcutSendKeys: '^+y',
+  dummyIdentity: { firstName: 'a', lastName: 'b', email: 'a@b.com', phone: '1', company: 'c', country: 'USA' },
+  knownDirectProviderDomains: ['zoom.us'],
+};
+
+check('validateConfig: the config actually shipped is valid', () => {
+  // Guards against a settings change landing without its spec entry - which would make every
+  // other test here pass while the real file quietly fails to start.
+  const result = validateConfig(loadConfig());
+  assert.ok(result.ok, `shipped config.json is invalid: ${result.errors.join('; ')}`);
+  assert.deepStrictEqual(result.warnings, [], `shipped config.json has warnings: ${result.warnings.join('; ')}`);
+});
+
+check('validateConfig: a misspelled key is reported, not silently ignored', () => {
+  const result = validateConfig({ ...BASE_CONFIG, treshholdMinutes: 15 });
+  assert.ok(result.ok, 'an unknown key must not block startup - that would punish adding settings');
+  assert.match(result.warnings.join('\n'), /treshholdMinutes/);
+});
+
+check('validateConfig: out-of-range and wrong-type values stop the run', () => {
+  assert.ok(!validateConfig({ ...BASE_CONFIG, maxAttempts: 0 }).ok, 'zero attempts would never try');
+  assert.ok(!validateConfig({ ...BASE_CONFIG, pollIntervalMs: 10 }).ok, '10ms polling would hammer the portal');
+  assert.ok(!validateConfig({ ...BASE_CONFIG, thresholdMinutes: -5 }).ok);
+  assert.ok(!validateConfig({ ...BASE_CONFIG, absentObservationsBeforeComplete: 1.5 }).ok, 'must be whole');
+  assert.ok(!validateConfig({ ...BASE_CONFIG, cdpUrl: 'not a url' }).ok);
+  assert.ok(!validateConfig({ ...BASE_CONFIG, portalUrl: undefined, cdpUrl: 'http://x' }).ok, 'required key missing');
+});
+
+check('validateConfig: a quoted number works but is called out', () => {
+  const result = validateConfig({ ...BASE_CONFIG, thresholdMinutes: '15' });
+  assert.ok(result.ok, 'it is coerced everywhere, so it must not block the run');
+  assert.match(result.warnings.join('\n'), /rather than the number 15/);
+});
+
+check('validateConfig: a mistyped extension ID is caught before the trigger step', () => {
+  // Otherwise this surfaces as a popup that never opens, minutes into a real call.
+  assert.ok(!validateConfig({ ...BASE_CONFIG, extensionId: 'not-an-id' }).ok);
+  assert.ok(!validateConfig({ ...BASE_CONFIG, extensionId: 'abcdefghijklmnopqrstuvwxyz123456' }).ok, 'z is out of range');
+  assert.ok(validateConfig({ ...BASE_CONFIG, extensionId: 'ajemmhlcfahhacllbjofkbbeageaedia' }).ok);
+  assert.ok(validateConfig({ ...BASE_CONFIG, extensionId: null }).ok, 'null means auto-detect');
+});
+
+check('validateConfig: a provider entry written as a URL can never match', () => {
+  // hostnameMatches compares hostnames, so "https://zoom.us/" silently matches nothing.
+  const result = validateConfig({ ...BASE_CONFIG, knownDirectProviderDomains: ['https://zoom.us/j'] });
+  assert.ok(!result.ok);
+  assert.match(result.errors.join('\n'), /bare hostname/);
+});
+
+check('validateConfig: settings that are individually fine but jointly wrong', () => {
+  // One call must fit comfortably inside the window, or the first dispatch can consume it.
+  const tight = validateConfig({ ...BASE_CONFIG, thresholdMinutes: 2, prepareDeadlineMs: 120000, triggerDeadlineMs: 90000 });
+  assert.match(tight.warnings.join('\n'), /exceeds the whole 2-minute window/);
+
+  // Polling slower than half the window can miss a call that enters and passes between ticks.
+  const slow = validateConfig({ ...BASE_CONFIG, thresholdMinutes: 15, pollIntervalMs: 600000 });
+  assert.match(slow.warnings.join('\n'), /more than half/);
+});
+
+// ---------------------------------------------------------------- instance lock
+
+// Two watchers on one Chrome and one data directory corrupt each other. processed.json is
+// rewritten whole from memory, so last-write-wins can erase a claim and dispatch the same call
+// twice; and the extension popup is a single global resource the batch pipeline already
+// serializes carefully within one process. This happened during testing - two were running and
+// the heartbeat described whichever wrote last.
+
+check('instanceLock: a second instance is refused while the first is alive', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock-'));
+  // process.pid is, by definition, a live process - the most honest stand-in for "the other
+  // watcher is still running".
+  const first = acquireInstanceLock(dir, { pid: process.pid });
+  assert.ok(first.ok);
+
+  const second = acquireInstanceLock(dir, { pid: process.pid + 1 });
+  assert.strictEqual(second.ok, false, 'a live holder must block a second instance');
+  assert.strictEqual(second.holder.pid, process.pid);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('instanceLock: a lock left by a crashed process is taken over, not honoured', () => {
+  // Otherwise a hard kill would require deleting a file by hand before the watcher could run
+  // again - making the safeguard itself a source of downtime.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock2-'));
+  // PID 0x7FFFFFFF is not a real process on any platform this runs on.
+  fs.writeFileSync(lockPathFor(dir), JSON.stringify({ pid: 2147483647, startedAt: '2026-01-01T00:00:00.000Z' }));
+
+  const result = acquireInstanceLock(dir, { pid: process.pid });
+  assert.ok(result.ok, 'a dead holder must not block startup');
+  assert.strictEqual(result.takeover.pid, 2147483647, 'the takeover is reported so it reaches the log');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('instanceLock: a corrupt lock file does not wedge startup', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock3-'));
+  fs.writeFileSync(lockPathFor(dir), 'not json at all');
+  assert.ok(acquireInstanceLock(dir, { pid: process.pid }).ok);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('instanceLock: releasing only removes a lock we still hold', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock4-'));
+  acquireInstanceLock(dir, { pid: process.pid });
+
+  // A late exit handler from a previous holder must not delete the successor's lock.
+  assert.strictEqual(releaseInstanceLock(dir, { pid: process.pid + 1 }), false);
+  assert.ok(fs.existsSync(lockPathFor(dir)), 'the current holder keeps its lock');
+
+  assert.strictEqual(releaseInstanceLock(dir, { pid: process.pid }), true);
+  assert.ok(!fs.existsSync(lockPathFor(dir)), 'a clean exit leaves no lock behind');
+  // Releasing twice is harmless.
+  assert.strictEqual(releaseInstanceLock(dir, { pid: process.pid }), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('instanceLock: re-acquiring your own lock is allowed', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-lock5-'));
+  assert.ok(acquireInstanceLock(dir, { pid: process.pid }).ok);
+  assert.ok(acquireInstanceLock(dir, { pid: process.pid }).ok, 'the same pid must not lock itself out');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------- report
