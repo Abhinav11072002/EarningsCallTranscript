@@ -42,7 +42,8 @@ says which question in its own header.
 
 ## What is deliberately NOT here
 
-`send-shortcut.ps1` lives in **`src/`**, with the code that calls it. It is runtime code: it
-forces Chrome to the foreground and injects the trusted keystroke that every capture depends
-on. It sat in this folder for a while, among the test scripts, one tidy-up away from being
-deleted as scaffolding.
+`send-shortcut.ps1` and `send-shortcut.applescript` live in **`src/`**, with the code that calls
+them. They are runtime code: one of them runs on every call, forcing Chrome to the foreground
+and injecting the trusted keystroke that the capture depends on. `extensionTrigger.js` picks
+between them by platform. The PowerShell one sat in this folder for a while, among the test
+scripts, one tidy-up away from being deleted as scaffolding.

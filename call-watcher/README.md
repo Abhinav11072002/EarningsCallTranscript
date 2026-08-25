@@ -182,11 +182,60 @@ cd call-watcher
 npm install
 ```
 
+### Running on macOS
+
+Supported, and verified on a Mac mini: the extension loads, the shortcut fires, the capture
+starts without a prompt, and a real transcript comes back.
+
+Two files differ by platform and `extensionTrigger.js`/`preflight.js` choose between them at
+runtime. Nothing else in the codebase is platform-specific.
+
+| Job | Windows | macOS |
+|---|---|---|
+| Inject the keystroke | `src/send-shortcut.ps1` (262 lines) | `src/send-shortcut.applescript` (~20) |
+| Check Chrome's launch flags | `Get-CimInstance Win32_Process` | `ps -ax -o command=` |
+
+The size difference is not an accident. Windows refuses to let a background process take the
+foreground, so that script attaches input threads, retries, and taps ALT to become eligible.
+macOS simply honours `activate`.
+
+What both must do is inject at the same level as real hardware. On Windows, `SendKeys` put the
+right window in the foreground - verifiably - and the extension command *still never fired*,
+because it posts window messages rather than true input; only `SendInput` worked. AppleScript's
+`keystroke` goes through the same path as physical input, which is why it works.
+
+**The shortcut stays `Ctrl+Shift+Y` on both.** Chrome binds a manifest `Ctrl` to the literal
+Control key on macOS, not to Command - confirmed by pressing it on the Mac. So no `mac` entry
+in the extension manifest is needed, and `extensionShortcutSendKeys` in config.json is read on
+both platforms. `shortcutKeys.js` translates it; translating Ctrl to Command would send a
+combination nothing listens for, and the silence would be indistinguishable from a failed
+injection, so a test asserts Command never appears.
+
+Launching Chrome, all on one line:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$HOME/ChromeDebugProfile" --auto-accept-this-tab-capture > /dev/null 2>&1 &
+```
+
+`--user-data-dir` creates a **separate, empty profile**, so the extension has to be loaded and
+the portal logged into once inside it.
+
+Two things macOS requires that Windows does not:
+
+- **Accessibility permission** for whatever process sends the keystroke, in System Settings >
+  Privacy & Security. Without it the keystroke is silently swallowed and every capture fails to
+  start. The error message says so when the injector exits with code 3.
+- **A real logged-in desktop session** - awake, unlocked, auto-login enabled. The capture
+  depends on a keypress landing on a real window, so nothing started over SSH alone can record.
+  See `Running-The-Automation-On-Mac-Minis.rtf` in the repository root for the full deployment
+  plan, including how to divide calls across several machines.
+
 ### Where things live
 
 ```
 src/                    everything the watcher runs on
-  send-shortcut.ps1     RUNTIME - the trusted keystroke every capture depends on
+  send-shortcut.ps1          RUNTIME (Windows) - the trusted keystroke every capture needs
+  send-shortcut.applescript  RUNTIME (macOS) - the same job, twenty lines instead of 262
 scripts/                commands you run: supervise, stop, report
 scripts/tests/          the automated suite (npm test)
 scripts/diagnostics/    probes you run by hand when something specific breaks

@@ -2,11 +2,45 @@ const { execFile } = require('child_process');
 const path = require('path');
 const http = require('http');
 const { describeJoinBlocker } = require('./joinFlow');
+const { parseSendKeys, toAppleScriptArgs, describeShortcut } = require('./shortcutKeys');
 
-// Beside this file on purpose. It is runtime code, not tooling: every capture depends on it,
-// and while it sat in scripts/ among the test files it was one tidy-up away from being
-// deleted as scaffolding.
+// Both beside this file on purpose. They are runtime code, not tooling: every capture depends
+// on one of them, and while the PowerShell one sat in scripts/ among the test files it was one
+// tidy-up away from being deleted as scaffolding.
 const SEND_SHORTCUT_SCRIPT = path.join(__dirname, 'send-shortcut.ps1');
+const SEND_SHORTCUT_APPLESCRIPT = path.join(__dirname, 'send-shortcut.applescript');
+
+// The two platforms need genuinely different mechanisms, not a flag. Windows has to fight for
+// the foreground (attach input threads, retry, tap ALT) and must inject via SendInput, because
+// window-message keystrokes focus the window but never fire the extension command. macOS just
+// honours `activate`, and AppleScript's keystroke goes through the same path as real hardware.
+// Both were verified on their own machines; neither approach works on the other platform.
+function buildShortcutCommand(sendKeysSequence, config, titleHint) {
+  if (process.platform === 'darwin') {
+    const parsed = parseSendKeys(sendKeysSequence);
+    return {
+      file: 'osascript',
+      args: [SEND_SHORTCUT_APPLESCRIPT, ...toAppleScriptArgs(parsed), titleHint || ''],
+      label: 'send-shortcut.applescript',
+      shortcut: describeShortcut(parsed),
+    };
+  }
+  // Windows identifies the target Chrome by its --remote-debugging-port, which is unambiguous
+  // even when the user's ordinary Chrome is also running. macOS has no equivalent need: it
+  // addresses the application by name and picks the window by tab title.
+  const port = new URL(config.cdpUrl).port;
+  const args = [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', SEND_SHORTCUT_SCRIPT, '-Port', port, '-Keys', sendKeysSequence,
+  ];
+  if (titleHint) args.push('-TitleHint', titleHint);
+  return {
+    file: 'powershell.exe',
+    args,
+    label: 'send-shortcut.ps1',
+    shortcut: sendKeysSequence,
+  };
+}
 
 const DEFAULT_SHORTCUT_TIMEOUT_MS = 30000;
 const DEFAULT_CDP_COMMAND_TIMEOUT_MS = 10000;
@@ -31,16 +65,17 @@ const DEFAULT_STREAM_CONFIRM_TIMEOUT_MS = 8000;
 // lock - stalling every later call for the rest of the day.
 function sendGlobalShortcut(sendKeysSequence, config, titleHint, logger) {
   return new Promise((resolve, reject) => {
-    const port = new URL(config.cdpUrl).port;
-    const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SEND_SHORTCUT_SCRIPT, '-Port', port, '-Keys', sendKeysSequence];
-    if (titleHint) args.push('-TitleHint', titleHint);
+    const command = buildShortcutCommand(sendKeysSequence, config, titleHint);
     const timeout = Number(config.shortcutTimeoutMs ?? DEFAULT_SHORTCUT_TIMEOUT_MS);
-    execFile('powershell.exe', args, { timeout }, (err, stdout, stderr) => {
+    execFile(command.file, command.args, { timeout }, (err, stdout, stderr) => {
       // Collapsed to one line on purpose: the logger writes one entry per call, so an embedded
       // newline produces continuation lines with no timestamp - which log rotation cannot
       // attribute to a time and therefore never prunes.
-      const out = (stdout || '').trim().split(/\r?\n/).filter(Boolean).join(' | ');
-      if (out) logger.info(`send-shortcut.ps1: ${out}`);
+      // osascript writes its `log` output to stderr, PowerShell to stdout - so both are read
+      // here, and the diagnostics survive on either platform rather than vanishing on one.
+      const streams = [stdout, process.platform === 'darwin' ? stderr : ''];
+      const out = streams.join('\n').trim().split(/\r?\n/).filter(Boolean).join(' | ');
+      if (out && !err) logger.info(`${command.label}: ${out}`);
       if (err) {
         // PowerShell error records are enormous (the message, then CategoryInfo and
         // FullyQualifiedErrorId, often duplicated). Keep just the human sentence so the log
@@ -49,9 +84,16 @@ function sendGlobalShortcut(sendKeysSequence, config, titleHint, logger) {
           .split(/\r?\n/)
           .map((l) => l.trim())
           .find((l) => l && !l.startsWith('+') && !/^(CategoryInfo|FullyQualifiedErrorId)/.test(l));
-        const detail = (firstSentence || '').replace(/^.*send-shortcut\.ps1\s*:\s*/, '').trim();
+        const detail = (firstSentence || '').replace(/^.*send-shortcut\.(ps1|applescript)\s*:\s*/, '').trim();
         const reason = err.killed ? `timed out after ${timeout}ms` : detail || err.message;
-        reject(new Error(`Focus/keystroke injection failed: ${reason}`));
+        // Exit 3 on macOS almost always means one specific, fixable thing, and saying so beats
+        // making someone infer it from an AppleScript error number.
+        const hint =
+          process.platform === 'darwin' && err.code === 3
+            ? ' (on macOS this usually means Chrome is not running, or this process has not been ' +
+              'granted Accessibility permission in System Settings > Privacy & Security)'
+            : '';
+        reject(new Error(`Focus/keystroke injection failed: ${reason}${hint}`));
       } else resolve();
     });
   });
@@ -433,6 +475,10 @@ async function triggerExtension(context, targetPage, row, config, logger, dialin
 module.exports = {
   // Exported for tests/diagnostics: it is pure inspection, no focus or capture side effects.
   assertPageLooksRelevant,
+  // Exported so the exact command each platform runs can be asserted without running it. The
+  // Windows form in particular is load-bearing and already working; adding the macOS branch
+  // must not have perturbed it.
+  buildShortcutCommand,
   triggerExtension,
   splitFiscalPeriod,
   getActiveStreams,

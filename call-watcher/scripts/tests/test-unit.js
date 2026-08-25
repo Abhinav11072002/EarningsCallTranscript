@@ -17,11 +17,13 @@ const { StateStore } = require('../../src/stateStore');
 const { shouldSkipAsLate } = require('../../src/dispatchRules');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
-const { splitFiscalPeriod, streamMatchesRow } = require('../../src/extensionTrigger');
+const { splitFiscalPeriod, streamMatchesRow, buildShortcutCommand } = require('../../src/extensionTrigger');
 const { createObservability } = require('../../src/observability');
 const { SeenLog, reconcile, formatReconciliation } = require('../../src/reconciliation');
 const { blindReason } = require('../../src/supervisorRules');
 const { validateConfig } = require('../../src/validateConfig');
+const { parseSendKeys, toAppleScriptModifiers, toAppleScriptArgs, describeShortcut } = require('../../src/shortcutKeys');
+const { macCommand, windowsCommand } = require('../../src/preflight');
 const { acquireInstanceLock, releaseInstanceLock, refreshInstanceLock, lockPathFor } = require('../../src/instanceLock');
 const { loadConfig } = require('../../src/loadConfig');
 const {
@@ -1276,6 +1278,100 @@ check('send-shortcut.ps1 is where the code that shells out to it expects', () =>
   // eslint-disable-next-line no-eval -- evaluating our own source expression, with __dirname bound
   const resolved = eval(match[1].replace('__dirname', JSON.stringify(srcDir)));
   assert.ok(fs.existsSync(resolved), `extensionTrigger.js points at ${resolved}, which does not exist`);
+});
+
+// ---------------------------------------------------------------- cross-platform shortcut
+
+// The shortcut is written once, in Windows SendKeys notation, and each platform's injector
+// renders it its own way. This translation is the only part of the macOS path testable from a
+// machine that is not a Mac - and getting it wrong sends a combination nothing listens for,
+// which looks exactly like the keystroke never arriving.
+
+check('shortcutKeys: the configured shortcut parses to the combination it means', () => {
+  assert.deepStrictEqual(parseSendKeys('^+y'), { ctrl: true, shift: true, alt: false, key: 'y' });
+  assert.deepStrictEqual(parseSendKeys('^y'), { ctrl: true, shift: false, alt: false, key: 'y' });
+  assert.deepStrictEqual(parseSendKeys('%+t'), { ctrl: false, shift: true, alt: true, key: 't' });
+  assert.strictEqual(describeShortcut(parseSendKeys('^+y')), 'Ctrl+Shift+Y');
+  // Case of the key does not matter to the injector, so normalise it once here.
+  assert.strictEqual(parseSendKeys('^+Y').key, 'y');
+});
+
+check('shortcutKeys: Ctrl stays Ctrl on macOS - it does NOT become Command', () => {
+  // Confirmed live on the Mac minis: a manifest "Ctrl+Shift+Y" binds to the literal Control
+  // key on macOS, and pressing Ctrl+Shift+Y opens the popup. Translating it to Command would
+  // send a combination the extension is not listening for, and the resulting silence would be
+  // indistinguishable from the injection having failed altogether.
+  const mods = toAppleScriptModifiers(parseSendKeys('^+y'));
+  assert.deepStrictEqual(mods, ['control down', 'shift down']);
+  assert.ok(!mods.some((m) => m.includes('command')), 'Command must never appear in the translation');
+});
+
+check('shortcutKeys: the AppleScript argument vector matches what the script expects', () => {
+  // Positional: key, control, shift, option - each modifier as "1" or "0", because AppleScript
+  // cannot turn a string like "control down, shift down" back into the constants it needs.
+  assert.deepStrictEqual(toAppleScriptArgs(parseSendKeys('^+y')), ['y', '1', '1', '0']);
+  assert.deepStrictEqual(toAppleScriptArgs(parseSendKeys('%y')), ['y', '0', '0', '1']);
+});
+
+check('shortcutKeys: a shortcut that could never work is rejected at parse time', () => {
+  // Better to fail on the first call with a clear message than to inject something inert and
+  // spend the day wondering why the popup never opens.
+  assert.throws(() => parseSendKeys(''), /empty/i);
+  assert.throws(() => parseSendKeys('y'), /no modifiers/i);
+  assert.throws(() => parseSendKeys('^{ENTER}'), /simple modifier sequence/i);
+  assert.throws(() => parseSendKeys('^'), /no key/i);
+});
+
+check('preflight: both platforms answer the same question about the capture flag', () => {
+  for (const build of [macCommand, windowsCommand]) {
+    const c = build('9222');
+    assert.ok(c.file && Array.isArray(c.args) && typeof c.interpret === 'function');
+    // The port must appear in the command, or it would match somebody else's Chrome.
+    assert.ok(JSON.stringify(c.args).includes('9222'));
+  }
+  const mac = macCommand('9222');
+  assert.strictEqual(mac.interpret('').status, 'no-matching-chrome');
+  assert.strictEqual(mac.interpret('/Applications/Chrome --remote-debugging-port=9222').status, 'missing-capture-flag');
+  assert.strictEqual(
+    mac.interpret('/Applications/Chrome --remote-debugging-port=9222 --auto-accept-this-tab-capture').status,
+    'ok'
+  );
+  const win = windowsCommand('9222');
+  assert.strictEqual(win.interpret('HAS_FLAG').status, 'ok');
+  assert.strictEqual(win.interpret('MISSING_FLAG').status, 'missing-capture-flag');
+  assert.strictEqual(win.interpret('NO_MATCH').status, 'no-matching-chrome');
+});
+
+check('the macOS injector script is present and takes the arguments we pass it', () => {
+  // Same guard as send-shortcut.ps1: the path is only exercised on a real call, on a Mac, so
+  // nothing else here would notice it going missing or its argument order changing.
+  const script = path.join(__dirname, '..', '..', 'src', 'send-shortcut.applescript');
+  assert.ok(fs.existsSync(script), 'src/send-shortcut.applescript is missing');
+  const text = fs.readFileSync(script, 'utf8');
+  assert.match(text, /on run argv/, 'must accept positional arguments');
+  // The four values toAppleScriptArgs produces, in order.
+  for (const item of ['item 1 of argv', 'item 2 of argv', 'item 3 of argv', 'item 4 of argv']) {
+    assert.ok(text.includes(item), `script does not read ${item}`);
+  }
+  assert.match(text, /control down/, 'must be able to send Control');
+  assert.ok(!/command down/.test(text), 'must never send Command - see shortcutKeys.js');
+});
+
+check('the Windows shortcut command is unchanged by the macOS branch', () => {
+  // The Windows path is proven in production. Adding macOS support must not perturb it by so
+  // much as an argument, so the whole vector is pinned rather than spot-checked.
+  const command = buildShortcutCommand('^+y', { cdpUrl: 'http://localhost:9222' }, 'ACME Q2 2026');
+  assert.strictEqual(command.file, 'powershell.exe');
+  assert.strictEqual(command.label, 'send-shortcut.ps1');
+
+  const args = command.args;
+  assert.deepStrictEqual(args.slice(0, 5), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']);
+  assert.ok(args[5].endsWith('send-shortcut.ps1'), 'must point at the PowerShell injector');
+  assert.deepStrictEqual(args.slice(6), ['-Port', '9222', '-Keys', '^+y', '-TitleHint', 'ACME Q2 2026']);
+
+  // The hint is genuinely optional - it is omitted when a page has no title.
+  const noHint = buildShortcutCommand('^+y', { cdpUrl: 'http://localhost:9222' }, '');
+  assert.ok(!noHint.args.includes('-TitleHint'));
 });
 
 // ---------------------------------------------------------------- report
