@@ -1406,6 +1406,78 @@ check('shortcut command: the two platforms send the SAME combination', () => {
   assert.deepStrictEqual(mac.args.slice(1, 5), ['y', '1', '1', '0']); // y, ctrl, shift, no option
 });
 
+// ---------------------------------------------------------------- blind-state debounce
+
+// Observed on the first Mac reboot: Chrome had been running for two seconds, the portal page
+// had not finished rendering, and the very first poll read zero rows - producing a frightening
+// ERROR about an expired session on a machine that was working perfectly. An alarm that cries
+// wolf on every restart is how people learn to ignore the one that matters, and worse, the
+// supervisor acts on these flags: a false noRows would have restarted a healthy watcher.
+
+check('observability: a blind state is only reported once it has persisted', () => {
+  withTempObs((obs, dir) => {
+    const read = () => JSON.parse(fs.readFileSync(path.join(dir, 'heartbeat.json'), 'utf8')).warnings;
+    const beat = (blindFor) =>
+      obs.heartbeat({
+        rowsSeen: 0, withLinks: 0, parseableTimes: 0, dueNow: 0, queueDepth: 0,
+        openCallTabs: 0, chromeConnected: true,
+        blindFor, blindPollsBeforeAlarm: 3,
+      });
+
+    // The page has not rendered yet - one poll, then two. Not an alarm.
+    beat({ noRows: 1, noLinks: 0, noReadableTimes: 0 });
+    assert.strictEqual(read().noRows, false, 'a single blank poll must not raise an alarm');
+    beat({ noRows: 2, noLinks: 0, noReadableTimes: 0 });
+    assert.strictEqual(read().noRows, false);
+
+    // Still blank on the third: now it is real.
+    beat({ noRows: 3, noLinks: 0, noReadableTimes: 0 });
+    assert.strictEqual(read().noRows, true, 'a persistent blank table must raise the alarm');
+
+    // Recovered - the counter resets, so the supervisor stops acting on it.
+    beat({ noRows: 0, noLinks: 0, noReadableTimes: 0 });
+    assert.strictEqual(read().noRows, false);
+  });
+});
+
+check('observability: each blind state is debounced independently', () => {
+  withTempObs((obs, dir) => {
+    const read = () => JSON.parse(fs.readFileSync(path.join(dir, 'heartbeat.json'), 'utf8')).warnings;
+    obs.heartbeat({
+      rowsSeen: 200, withLinks: 0, parseableTimes: 0, dueNow: 0, queueDepth: 0,
+      openCallTabs: 0, chromeConnected: true,
+      blindFor: { noRows: 0, noLinks: 4, noReadableTimes: 1 },
+      blindPollsBeforeAlarm: 3,
+    });
+    const w = read();
+    assert.strictEqual(w.noRows, false, 'rows are fine');
+    assert.strictEqual(w.noLinks, true, 'links have been missing long enough');
+    assert.strictEqual(w.noReadableTimes, false, 'times have only just started failing');
+  });
+});
+
+check('observability: without debounce data the old immediate behaviour still applies', () => {
+  // Nothing else calls heartbeat(), but a caller that omitted blindFor should not silently
+  // lose its alarms - it falls back to judging the current reading alone.
+  withTempObs((obs, dir) => {
+    obs.heartbeat({
+      rowsSeen: 0, withLinks: 0, dueNow: 0, queueDepth: 0, openCallTabs: 0, chromeConnected: true,
+    });
+    const w = JSON.parse(fs.readFileSync(path.join(dir, 'heartbeat.json'), 'utf8')).warnings;
+    assert.strictEqual(w.noRows, true);
+  });
+});
+
+check('supervisor: it acts on the debounced flag, so a booting page is not a restart', () => {
+  // The two halves have to agree. If the heartbeat said "blind" while the log said "still
+  // loading", the supervisor would kill a healthy watcher every time the machine rebooted.
+  const booting = { pid: 42, updatedAt: new Date().toISOString(), warnings: { noRows: false } };
+  assert.strictEqual(blindReason(booting, { pid: 42 }), null);
+
+  const genuinelyBlind = { pid: 42, updatedAt: new Date().toISOString(), warnings: { noRows: true } };
+  assert.match(blindReason(genuinelyBlind, { pid: 42 }), /zero rows/);
+});
+
 // ---------------------------------------------------------------- report
 
 (async () => {

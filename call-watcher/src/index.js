@@ -445,6 +445,13 @@ async function main() {
   // reconciliation, no completion), while first attempts keep succeeding - so the log looks
   // healthy. Surfaced in the heartbeat so a watchdog can see it.
   let consecutiveStreamReadFailures = 0;
+  // How many polls in a row each blind state has held. A single blank reading is normal and
+  // expected - most obviously on the first poll after a reboot, when Chrome has been running
+  // for two seconds and the portal's page has not finished rendering. Escalating on that
+  // produced a frightening ERROR on every single restart, which is exactly how people learn to
+  // ignore the one that matters. These only speak up once a state has persisted.
+  const blindFor = { noRows: 0, noLinks: 0, noReadableTimes: 0 };
+  const BLIND_POLLS_BEFORE_ALARM = 3;
   const poll = async () => {
     if (pollRunning) {
       logger.warn('Skipping overlapping poll; previous poll is still running.');
@@ -486,10 +493,20 @@ async function main() {
     // Escalate the two states that are indistinguishable from a quiet day in the log but mean
     // we are blind: a renamed column header or an expired portal session both yield rows we
     // can see but no links to act on (or no rows at all), forever, silently.
-    if (rows.length === 0) {
-      logger.error('Table produced ZERO rows - portal session may have expired, or the view/markup changed. No calls can be detected in this state.');
-    } else if (withLinks === 0) {
-      logger.error(`Table produced ${rows.length} row(s) but ZERO dial-in links - the "Dialin Link" column may have been renamed or moved. No calls can be detected in this state.`);
+    blindFor.noRows = rows.length === 0 ? blindFor.noRows + 1 : 0;
+    blindFor.noLinks = rows.length > 0 && withLinks === 0 ? blindFor.noLinks + 1 : 0;
+    // Reported on the Nth consecutive poll only, and then once - not on every poll after,
+    // which would bury the log in identical lines for as long as the condition lasted.
+    if (blindFor.noRows === BLIND_POLLS_BEFORE_ALARM) {
+      logger.error(
+        `Table produced ZERO rows on ${BLIND_POLLS_BEFORE_ALARM} consecutive polls - the portal ` +
+          'session may have expired, or the view/markup changed. No calls can be detected in this state.'
+      );
+    } else if (blindFor.noLinks === BLIND_POLLS_BEFORE_ALARM) {
+      logger.error(
+        `Table produced ${rows.length} row(s) but ZERO dial-in links on ${BLIND_POLLS_BEFORE_ALARM} ` +
+          'consecutive polls - the "Dialin Link" column may have been renamed or moved. No calls can be detected.'
+      );
     }
 
     // Pass 1: decide which rows are actionable, without touching Chrome. Collecting them
@@ -584,11 +601,13 @@ async function main() {
     // are already escalated above; "plenty of rows, plenty of links, and not one readable time"
     // is what a change to the Transcription Time format looks like, and it is indistinguishable
     // from a quiet day: every row warns once, then nothing ever becomes due again, all day.
-    if (linkedRows > 0 && parseableTimes === 0) {
+    blindFor.noReadableTimes = linkedRows > 0 && parseableTimes === 0 ? blindFor.noReadableTimes + 1 : 0;
+    if (blindFor.noReadableTimes === BLIND_POLLS_BEFORE_ALARM) {
       logger.error(
         `Table produced ${linkedRows} row(s) with dial-in links but NOT ONE readable ` +
-          'Transcription Time - the time format has probably changed. No call can become due ' +
-          'in this state. See tableWatcher.js (parseCountdownToMinutes / parseAbsoluteDateTimeToMinutes).'
+          `Transcription Time on ${BLIND_POLLS_BEFORE_ALARM} consecutive polls - the time format has ` +
+          'probably changed. No call can become due in this state. See tableWatcher.js ' +
+          '(parseCountdownToMinutes / parseAbsoluteDateTimeToMinutes).'
       );
     }
 
@@ -617,6 +636,10 @@ async function main() {
       rowsSeen: rows.length,
       withLinks,
       parseableTimes,
+      // Debounced, so the supervisor does not restart the watcher over a page that simply has
+      // not finished loading - which is the state every reboot passes through.
+      blindFor,
+      blindPollsBeforeAlarm: BLIND_POLLS_BEFORE_ALARM,
       dueNow: dueRows.length,
       queueDepth: queuedPipelines,
       openCallTabs: callTabs.size(),

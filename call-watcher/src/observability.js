@@ -44,7 +44,23 @@ function createObservability(dataDir, logger) {
 
     // Called every poll. `health` carries what an external watchdog needs to judge liveness
     // without parsing logs: staleness of this file, plus whether the table is still readable.
-    heartbeat({ rowsSeen, withLinks, parseableTimes = null, dueNow, queueDepth, openCallTabs, streamReadFailures = 0, chromeConnected }) {
+    heartbeat({
+      rowsSeen,
+      withLinks,
+      parseableTimes = null,
+      blindFor = null,
+      blindPollsBeforeAlarm = 1,
+      dueNow,
+      queueDepth,
+      openCallTabs,
+      streamReadFailures = 0,
+      chromeConnected,
+    }) {
+      // A blind state only counts once it has persisted. Without this the supervisor would
+      // restart the watcher on the first poll after every reboot, when the portal page has
+      // simply not rendered yet - turning a two-second wait into a restart loop.
+      const persisted = (key, fallback) =>
+        blindFor ? (blindFor[key] || 0) >= blindPollsBeforeAlarm : fallback;
       counters.pollCount++;
       safeWrite(() => {
         fs.writeFileSync(
@@ -66,11 +82,11 @@ function createObservability(dataDir, logger) {
               // A watchdog should alert on any of these being true, not just on staleness:
               // they are the "running but blind" states that used to look like a quiet day.
               warnings: {
-                noRows: rowsSeen === 0,
-                noLinks: rowsSeen > 0 && withLinks === 0,
+                noRows: persisted('noRows', rowsSeen === 0),
+                noLinks: persisted('noLinks', rowsSeen > 0 && withLinks === 0),
                 // Rows and links present, but no readable Transcription Time: nothing can
                 // ever become due, and every other signal here looks perfectly healthy.
-                noReadableTimes: withLinks > 0 && parseableTimes === 0,
+                noReadableTimes: persisted('noReadableTimes', withLinks > 0 && parseableTimes === 0),
                 queueBacklog: queueDepth > 3,
                 // Tabs are closed when their call completes; a climbing count means completion
                 // is not being observed, which is how Chrome ends up out of memory over days.
