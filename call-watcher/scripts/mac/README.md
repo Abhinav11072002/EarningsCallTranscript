@@ -61,22 +61,59 @@ tail -f data/launchagent.log
 You should see Chrome being started (or found already running), then the supervisor's first
 lines. To stop it: `launchctl unload ~/Library/LaunchAgents/com.fmp.callwatcher.plist`.
 
-## 4. The permission that will catch you out
+## 4. Accessibility - the step that will catch you out
+
+Not a prediction: this happened on the first machine, and it will happen on every one.
 
 Accessibility is granted to the **process that sends the keystroke**, and under launchd that is
 not Terminal. Granting it to Terminal makes the diagnostic pass by hand and the Launch Agent
-fail — the most confusing possible outcome, because both look like they are running the same
-thing.
+fail, which is the most confusing possible outcome because both look like they are running the
+same thing. The exact error:
 
-After loading the agent, watch `data/launchagent.log` through a real call, or force the issue:
-
-```bash
-launchctl kickstart -k gui/$(id -u)/com.fmp.callwatcher
+```
+System Events got an error: osascript is not allowed to send keystrokes. (1002)
 ```
 
-If captures fail with **exit code 3**, the injector is saying it lacks Accessibility. Add the
-Node binary itself in System Settings → Privacy & Security → **Accessibility** → **+** — press
-`Cmd+Shift+G` in the file picker and enter the path from `which node`.
+Add **both** of these in System Settings > Privacy & Security > **Accessibility** > **+**:
+
+```
+/opt/homebrew/opt/node@22/bin/node
+/usr/bin/osascript
+```
+
+Both, because under launchd the responsible process is not obvious. The error names
+`osascript`, but TCC often attributes it to whatever launchd started instead. Adding both
+settles it without a guessing loop.
+
+Note the trade: granting `/usr/bin/osascript` lets any AppleScript on the machine send
+keystrokes. On a dedicated recording server that is reasonable. If you would rather not, add
+`node` alone first and re-test; if that is enough, remove `osascript` again.
+
+If the path is a Homebrew symlink, `readlink -f` gives the real one. TCC can be fussy about
+symlinks, so add the resolved path too if in doubt.
+
+### Adding a command-line binary in the file picker
+
+Finder will not browse to `/usr/bin`. Either press **Cmd+Shift+G** and paste the path - on a PC
+keyboard the **Windows key** is Cmd - or type `/` to open the same prompt. Or skip the picker
+and drag the file in from Finder:
+
+```bash
+open -R /usr/bin/osascript
+```
+
+### Verify under launchd, not under Terminal
+
+A diagnostic run from a terminal proves nothing about the agent, because they have different
+permissions. Run it as a launchd job instead, and remove it in the same command - a submitted
+job restarts when it exits and will otherwise loop:
+
+```bash
+launchctl submit -l cw-diag -o /tmp/cw-diag.log -e /tmp/cw-diag.log -- /opt/homebrew/opt/node@22/bin/node "$HOME/EarningsCallTranscript/call-watcher/scripts/diagnostics/diag-popup-reliability.js" 3
+sleep 8 && launchctl remove cw-diag && cat /tmp/cw-diag.log
+```
+
+Anything other than 3/3 is worth fixing before trusting the machine.
 
 ## 5. Prove it survives a reboot
 

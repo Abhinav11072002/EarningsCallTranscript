@@ -4,9 +4,13 @@
 -- depending on the platform, and every capture depends on it: this is what puts Chrome in the
 -- foreground and delivers the keystroke that opens the extension popup.
 --
--- Why this is twenty lines where the Windows version is 262: Windows actively refuses to let a
--- background process take the foreground, so that script has to attach input threads, retry,
--- and tap ALT to become eligible. macOS simply honours `activate`.
+-- Why this is a fraction of the Windows version's 262 lines: Windows actively refuses to let a
+-- background process take the foreground, so that script has to attach input threads and tap
+-- ALT to become eligible. macOS honours `activate` outright.
+--
+-- What both need is the retry. Winning the foreground is not instantaneous on either platform,
+-- and a single attempt loses the race often enough to matter - measured at about one in twelve
+-- here during setup.
 --
 -- What both share is the requirement that made the Windows one hard-won. The keystroke must be
 -- injected at the same level as real hardware. On Windows, SendKeys - which posts window
@@ -65,18 +69,37 @@ on run argv
 				end try
 			end repeat
 		end if
-		activate
 	end tell
 
-	-- Confirm the foreground actually changed rather than assuming it did. A keystroke sent to
-	-- the wrong application is silently lost, and the only symptom downstream is the popup
-	-- never appearing - which reads as a broken extension rather than a focus problem.
-	delay 0.3
-	tell application "System Events"
-		set frontApp to name of first application process whose frontmost is true
-	end tell
-	if frontApp is not "Google Chrome" then
-		log "Could not bring Chrome to the foreground - frontmost app is " & frontApp
+	-- Activate, then CONFIRM, and retry if it did not take.
+	--
+	-- Losing the race here is transient and ordinary: a single activate followed by one check
+	-- failed roughly one time in twelve during setup, always with Terminal still frontmost,
+	-- because something else had the foreground at that instant. The Windows injector learned
+	-- this the same way and retries four times; this did not, and it should.
+	--
+	-- Confirming rather than assuming is the important half. A keystroke sent to the wrong
+	-- application is silently lost, and the only symptom downstream is a popup that never
+	-- appears - which reads as a broken extension rather than a focus problem.
+	set maxAttempts to 4
+	set gotFocus to false
+	set lastFront to "nothing"
+	repeat with attempt from 1 to maxAttempts
+		tell application "Google Chrome" to activate
+		delay 0.25
+		tell application "System Events"
+			set lastFront to name of first application process whose frontmost is true
+		end tell
+		if lastFront is "Google Chrome" then
+			set gotFocus to true
+			log "Focus acquired on attempt " & attempt & " of " & maxAttempts
+			exit repeat
+		end if
+		delay 0.2
+	end repeat
+
+	if not gotFocus then
+		log "Could not bring Chrome to the foreground after " & maxAttempts & " attempts - frontmost app is " & lastFront
 		error number 2
 	end if
 
