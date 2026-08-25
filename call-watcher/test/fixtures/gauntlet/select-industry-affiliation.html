@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><title>Q4 2026 Earnings Call registration</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <h1>Register for the call</h1>
+  <form id="f">
+    <label for="fn">First name</label><input id="fn" data-expect="firstName">
+    <label for="ln">Last name</label><input id="ln" data-expect="lastName">
+    <label for="em">Email address</label><input id="em" type="email" data-expect="email">
+    <label for="co">Company</label><input id="co" data-expect="company">
+
+    <label for="industry">Industry Affiliation</label>
+    <select id="industry" required>
+      <option value="">Please select</option>
+      <option value="analyst">Sell-side Analyst</option>
+      <option value="buyside">Buy-side Investor</option>
+      <option value="media">Media</option>
+      <option value="other">Other</option>
+    </select>
+
+    <button type="submit">Register</button>
+  </form>
+  <div id="ok" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('f').addEventListener('submit', function (e) {
+      e.preventDefault();
+      // The form refuses while the dropdown is unanswered - which is exactly what stalled INTU.
+      if (!document.getElementById('industry').value) return;
+      document.getElementById('f').hidden = true;
+      document.getElementById('ok').hidden = false;
+    });
+  </script>
+</body></html>

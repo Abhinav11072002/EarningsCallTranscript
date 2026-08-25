@@ -28,7 +28,17 @@ async function describeField(el) {
     // Fallback for forms where the visible label is just positioned above/near the input via
     // CSS, with no <label for=...>/wrapping association (common on custom-styled forms) - find
     // the nearest short text sitting just above this field, within its horizontal span.
+    //
+    // Skipped entirely when the field already has a real label or aria-label. It is a fallback,
+    // and using it as well as an explicit label only adds noise: a "Preferred contact time"
+    // select picked up a nearby "First name", was therefore treated as a first-name field, and
+    // the filler tried to select the dummy first name among its options. Measured live.
     el.evaluate((node) => {
+      const labelled =
+        (node.id && document.querySelector(`label[for="${node.id}"]`)) ||
+        node.closest('label') ||
+        node.getAttribute('aria-label');
+      if (labelled) return null;
       const rect = node.getBoundingClientRect();
       const candidates = Array.from(document.querySelectorAll('label, p, span, div, legend'))
         .filter((c) => !c.contains(node) && !node.contains(c));
@@ -179,6 +189,8 @@ const CLICKABLE_SELECTOR =
   'button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible, a[href]:visible';
 
 const CLICK_TIMEOUT_MS = 5000;
+// A rendered select's options exist already; waiting longer cannot make a missing one appear.
+const SELECT_TIMEOUT_MS = 2000;
 
 // Entry CTAs for gates that have nothing to type - the page is one button away from the call.
 // Kept separate from REGISTRATION_BUTTON_PATTERN because these are also accepted when no field
@@ -257,7 +269,14 @@ async function fillVisibleFields(frame, identity, logger, allowFurnitureFallback
   for (const { el, tag, description, key } of targets) {
     try {
       if (tag === 'select') {
-        await el.selectOption({ label: identity[key] }).catch(() => el.selectOption(identity[key]).catch(() => {}));
+        // Bounded, and deliberately short. selectOption WAITS for a matching option to appear,
+        // so asking a "Preferred contact time" dropdown for "nocos" blocks for Playwright's
+        // 30-second default - and the fallback below made it 60. Measured exactly that, on one
+        // dropdown, inside the pipeline lock. The options of a rendered select are already
+        // there or they are not; there is nothing to wait for.
+        await el
+          .selectOption({ label: identity[key] }, { timeout: SELECT_TIMEOUT_MS })
+          .catch(() => el.selectOption(identity[key], { timeout: SELECT_TIMEOUT_MS }).catch(() => {}));
       } else {
         await el.fill(String(identity[key]));
       }
@@ -288,14 +307,99 @@ async function fillVisibleFields(frame, identity, logger, allowFurnitureFallback
   return filledCount;
 }
 
+// Dropdowns a registration form requires but that mean nothing to us - "Industry Affiliation",
+// "How did you hear about us", "Attendee Type". They match no identity field, so they were left
+// on their placeholder and the form refused to submit. Observed live on INTU 2026Q4, which
+// failed all four attempts against an unanswered Industry Affiliation.
+//
+// "Other" is chosen deliberately rather than the first available option: it is the choice that
+// is true, is offered by nearly every such dropdown, and cannot accidentally assert something
+// specific about who is joining. If no such option exists the select is left alone - guessing
+// at "Analyst" or "Institutional Investor" would be inventing an answer.
+const OTHER_OPTION_PATTERN = /^\s*other\b|\bother\s*$/i;
+
+async function fillUnmatchedSelects(frame, identity, logger) {
+  const selects = await frame.$$('select:visible').catch(() => []);
+  let filled = 0;
+  for (const select of selects) {
+    if (await select.isDisabled().catch(() => false)) continue;
+    if (await isFurniture(select)) continue;
+
+    const description = await describeField(select);
+    // Anything we can answer properly is handled by the identity pass; do not override it.
+    if (matchField(description)) continue;
+    if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
+
+    const current = (await select.inputValue().catch(() => '')) || '';
+    // A select that already holds a real answer is left as it is - only placeholders qualify.
+    if (current && !/^(|0|-1|none|select|choose|please)/i.test(current.trim())) continue;
+
+    const chosen = await select
+      .evaluate((node, source) => {
+        const re = new RegExp(source, 'i');
+        const option = Array.from(node.options).find((o) => re.test(o.textContent || '') && o.value);
+        if (!option) return null;
+        node.value = option.value;
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+        node.dispatchEvent(new Event('change', { bubbles: true }));
+        return option.textContent.trim();
+      }, OTHER_OPTION_PATTERN.source)
+      .catch(() => null);
+
+    if (chosen) {
+      logger.info(`Answered "${(description || 'a dropdown').trim().slice(0, 60)}" with "${chosen}".`);
+      filled++;
+    }
+  }
+  return filled;
+}
+
+const CONSENT_TEXT_PATTERN = /agree|consent|terms|condition|privacy|policy|acknowledge|accept/i;
+
 async function checkRequiredConsent(frame, logger) {
   const checkboxes = await frame.$$('input[type=checkbox]:visible').catch(() => []);
   for (const checkbox of checkboxes) {
+    if (await checkbox.isChecked().catch(() => false)) continue;
+    if (await isFurniture(checkbox)) continue;
+
     const description = await describeField(checkbox);
-    if (!/agree|consent|terms|condition|privacy|subscribe/i.test(description)) continue;
-    if (!(await checkbox.isChecked().catch(() => false))) {
-      await checkbox.check().catch((err) => logger.warn(`Could not check consent box "${description}": ${err.message}`));
+    let reason = CONSENT_TEXT_PATTERN.test(description) ? 'wording' : null;
+
+    // A REQUIRED checkbox on a registration form has to be ticked whatever it says. Observed
+    // live on SMTC 2027Q2, which failed all four attempts on an unchecked terms box: its label
+    // was not associated with the input in any way describeField could see, so the wording
+    // test alone never matched it.
+    if (!reason) {
+      const required = await checkbox
+        .evaluate((node) => node.required || node.getAttribute('aria-required') === 'true')
+        .catch(() => false);
+      if (required) reason = 'required';
     }
+
+    // Last resort: the visible text of the container the checkbox sits in. Custom-styled forms
+    // routinely put the wording in a sibling element with no `for`, no wrapping label and no
+    // aria-label - invisible to every attribute-based check, and perfectly obvious on screen.
+    if (!reason) {
+      const nearbyText = await checkbox
+        .evaluate((node) => {
+          let el = node.parentElement;
+          for (let depth = 0; el && depth < 3; depth++, el = el.parentElement) {
+            const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
+            // Bounded: a whole form's text would match almost anything.
+            if (text && text.length <= 300) return text;
+          }
+          return '';
+        })
+        .catch(() => '');
+      if (CONSENT_TEXT_PATTERN.test(nearbyText)) reason = 'nearby text';
+    }
+
+    if (!reason) continue;
+    const label = (description || '').trim().slice(0, 60) || 'an unlabelled checkbox';
+    await checkbox
+      .check()
+      .then(() => logger.info(`Ticked consent checkbox (${reason}): ${label}`))
+      .catch((err) => logger.warn(`Could not check consent box "${label}": ${err.message}`));
   }
 }
 
@@ -573,7 +677,10 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged) {
       // chrome. Once we have acted, a remaining chrome-only field is page furniture (a footer
       // newsletter) that happens to look identity-shaped - filling it subscribes the dummy
       // identity and widens the set of buttons the click step will then accept.
-      const filledCount = await fillVisibleFields(frame, identity, logger, step === 0 && !lastAction);
+      let filledCount = await fillVisibleFields(frame, identity, logger, step === 0 && !lastAction);
+      // Only once the identity fields are in: an unmatched dropdown is answered as a last
+      // resort, never in preference to a field we actually understand.
+      filledCount += await fillUnmatchedSelects(frame, identity, logger);
       await checkRequiredConsent(frame, logger);
       const outcome = await clickFirstMatchingButton(page, frame, logger, filledCount > 0, filledCount === 0);
       if (outcome.clicked && outcome.entryWorded && !REGISTRATION_BUTTON_PATTERN.test(outcome.clickedText)) {

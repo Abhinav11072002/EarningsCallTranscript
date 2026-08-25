@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><title>Q2 2027 Earnings Call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <h1>Join the webcast</h1>
+  <form id="f">
+    <label for="fn">First name</label><input id="fn" data-expect="firstName">
+    <label for="em">Email address</label><input id="em" type="email" data-expect="email">
+
+    <div class="tc-row">
+      <input type="checkbox" id="tc" required>
+      <span class="tc-text">I have read and accept the terms and conditions and the privacy policy.</span>
+    </div>
+
+    <button type="submit">Register</button>
+  </form>
+  <div id="ok" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('f').addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (!document.getElementById('tc').checked) return;   // the box that stalled SMTC
+      document.getElementById('f').hidden = true;
+      document.getElementById('ok').hidden = false;
+    });
+  </script>
+</body></html>

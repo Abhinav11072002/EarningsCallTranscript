@@ -1,0 +1,34 @@
+<!doctype html>
+<html><head><title>Q2 2026 Earnings Call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <form id="f">
+    <label for="fn">First name</label><input id="fn" data-expect="firstName">
+    <label for="em">Email address</label><input id="em" type="email" data-expect="email">
+
+    <label for="country">Country</label>
+    <select id="country" data-expect="country">
+      <option value="">Please select</option>
+      <option value="USA">USA</option>
+      <option value="UK">UK</option>
+      <option value="Other">Other</option>
+    </select>
+
+    <label for="pref">Preferred contact time</label>
+    <select id="pref" data-expect="none">
+      <option value="">Please select</option>
+      <option value="am">Morning</option>
+      <option value="pm">Afternoon</option>
+    </select>
+
+    <button type="submit">Register</button>
+  </form>
+  <div id="ok" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('f').addEventListener('submit', function (e) {
+      e.preventDefault();
+      document.getElementById('f').hidden = true;
+      document.getElementById('ok').hidden = false;
+    });
+  </script>
+</body></html>

@@ -466,6 +466,28 @@ async function triggerExtension(context, targetPage, row, config, logger, dialin
       await new Promise((r) => setTimeout(r, 300));
     }
     if (!started) {
+      // The popup's DOM is only ONE view of whether the capture began. The extension's own
+      // activeStreams record in chrome.storage.local is the authoritative one, and it is what
+      // the poll loop reconciles against everywhere else - so ask it before declaring failure.
+      //
+      // This is not a nicety. Observed live on NCNO 2027Q2: the capture started correctly, this
+      // confirmation timed out reading the popup, the call was recorded as failed, and the
+      // retry clicked Start a second time - which STOPPED the recording that was already
+      // running. A false negative here does not merely mislabel a success, it destroys one.
+      //
+      // Reading storage opens an extension tab, which closes this popup. That is fine now: the
+      // popup has done its job either way, and the session is closed first so nothing is
+      // waiting on a socket that is about to die.
+      session.close();
+      const streams = await getActiveStreams(context, config).catch(() => null);
+      if (streams && streamMatchesRow(streams, row)) {
+        logger.warn(
+          `Could not confirm "${expectedLabel}" from the popup, but the extension's own stream ` +
+            'list shows it as active - treating the capture as started. Retrying would have ' +
+            'stopped it.'
+        );
+        return;
+      }
       const because = lastConfirmError ? `: ${lastConfirmError.message}` : '';
       throw new Error(`Clicked Start but could not confirm an active stream matching "${expectedLabel}"${because}`);
     }
