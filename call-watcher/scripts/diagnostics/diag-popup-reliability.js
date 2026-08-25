@@ -16,11 +16,10 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { chromium } = require('playwright-core');
 const { loadConfig } = require('../../src/loadConfig');
-const { splitFiscalPeriod } = require('../../src/extensionTrigger');
+const { splitFiscalPeriod, buildShortcutCommand } = require('../../src/extensionTrigger');
 
 const config = loadConfig();
 const iterations = Number(process.argv[2] || 10);
-const SCRIPT = path.join(__dirname, '..', '..', 'src', 'send-shortcut.ps1');
 
 const listTargets = () =>
   new Promise((resolve) => {
@@ -39,21 +38,51 @@ const listTargets = () =>
     req.setTimeout(5000, () => req.destroy());
   });
 
+// Goes through buildShortcutCommand rather than invoking an injector directly, so this measures
+// the SAME command a real call would run. It used to hardcode powershell.exe, which meant that
+// on macOS it failed in a few milliseconds with an empty message - reporting 0/5 against a
+// machine whose setup was completely fine. A diagnostic that only works on one platform is
+// worse than none: it produces confident, wrong answers about the other.
 function sendShortcut(titleHint) {
   return new Promise((resolve) => {
-    const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT, '-Port', new URL(config.cdpUrl).port, '-Keys', config.extensionShortcutSendKeys];
-    if (titleHint) args.push('-TitleHint', titleHint);
-    execFile('powershell.exe', args, { timeout: 30000 }, (err, stdout, stderr) => {
-      // Keep only the meaningful sentence: PowerShell error records are huge and repetitive.
+    let command;
+    try {
+      command = buildShortcutCommand(config.extensionShortcutSendKeys, config, titleHint);
+    } catch (err) {
+      resolve({ ok: false, detail: `could not build the shortcut command: ${err.message}` });
+      return;
+    }
+
+    execFile(command.file, command.args, { timeout: 30000 }, (err, stdout, stderr) => {
+      // Keep only the meaningful sentence: PowerShell error records are huge and repetitive,
+      // and osascript prefixes its own noise.
       const pick = (text) =>
         (text || '')
           .split(/\r?\n/)
           .map((l) => l.trim())
           .find((l) => l && !l.startsWith('+') && !/^(CategoryInfo|FullyQualifiedErrorId)/.test(l)) || '';
-      const detail = err
-        ? pick(stderr).replace(/^.*send-shortcut\.ps1\s*:\s*/, '').slice(0, 160)
-        : (stdout || '').trim().split(/\r?\n/).join(' | ');
-      resolve({ ok: !err, detail });
+
+      if (err) {
+        // A missing interpreter is not a focus failure, and saying so plainly saves a long
+        // detour - this is exactly what produced the silent 4ms failures on the first Mac.
+        if (err.code === 'ENOENT') {
+          resolve({ ok: false, detail: `${command.file} is not available on this machine` });
+          return;
+        }
+        const reason =
+          pick(stderr).replace(/^.*send-shortcut\.(ps1|applescript)\s*:\s*/, '').slice(0, 160) ||
+          (err.killed ? 'timed out' : `exit code ${err.code}`);
+        const hint =
+          command.file === 'osascript' && err.code === 3
+            ? ' (Chrome not running, or Accessibility permission not granted to this terminal)'
+            : '';
+        resolve({ ok: false, detail: reason + hint });
+        return;
+      }
+
+      // osascript logs to stderr, PowerShell to stdout.
+      const output = command.diagnosticsOnStderr ? stderr : stdout;
+      resolve({ ok: true, detail: (output || '').trim().split(/\r?\n/).filter(Boolean).join(' | ') });
     });
   });
 }
