@@ -3,7 +3,13 @@ const { NATIVE_APP_PATTERN } = require('./joinFlow');
 const FIELD_PATTERNS = [
   { key: 'firstName', regex: /first\s*name|fname|given\s*name/i },
   { key: 'lastName', regex: /last\s*name|lname|surname|family\s*name/i },
-  { key: 'fullName', regex: /(?:^|\s)(?:full[\s_-]*name|your[\s_-]*name|name)(?:\s|$)/i },
+  // The trailing boundary is (?![A-Za-z]) rather than (?:\s|$) because real labels carry
+  // punctuation: "Name*:" is what ELMD's form actually says, and requiring whitespace or
+  // end-of-string after "name" meant it never matched. The field was then claimed by the
+  // email pattern picking up the neighbouring "Email*:" label, so the attendee's NAME was
+  // filled with an email address and the form rejected the registration on every attempt.
+  // Still anchored at the FRONT, so "username" and "filename" remain excluded.
+  { key: 'fullName', regex: /(?:^|\s)(?:full[\s_-]*name|your[\s_-]*name|name)(?![A-Za-z])/i },
   { key: 'email', regex: /e-?mail/i },
   { key: 'phone', regex: /phone|mobile|tel(ephone)?/i },
   { key: 'company', regex: /company|organi[sz]ation|institution|firm/i },

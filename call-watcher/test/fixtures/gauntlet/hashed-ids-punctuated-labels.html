@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- Modelled on ELMD's real registration form (viavid.webcasts.com). Two things about it broke
+     the filler, and both are common: the ids are opaque hashes, so ALL the meaning lives in the
+     labels; and every label carries punctuation - "Name*:" not "Name". Requiring whitespace or
+     end-of-string after "name" meant that field never matched, and it was then claimed by the
+     email pattern picking up the neighbouring "Email*:" label. The attendee's NAME was filled
+     with an email address and the form rejected the registration on all four attempts. -->
+<html><head><title>Electromed Fiscal Q4 2026 Earnings Call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <h1>Register</h1>
+  <p>(* indicates required field)</p>
+  <form id="f">
+    <label for="197653086fc9cc7c8f2f9142e448d4804b54a6be">Email*:</label>
+    <input id="197653086fc9cc7c8f2f9142e448d4804b54a6be" name="197653086fc9cc7c8f2f9142e448d4804b54a6be" type="email" data-expect="email">
+
+    <label for="3b7cb838a74c9f5f96f84e81acc974b13aa4e27e">Name*:</label>
+    <input id="3b7cb838a74c9f5f96f84e81acc974b13aa4e27e" name="3b7cb838a74c9f5f96f84e81acc974b13aa4e27e" type="text" data-expect="fullName">
+
+    <label for="29ea5d7b9e46d0e83b73c8b912c86ad7f5ead00d">Company*:</label>
+    <input id="29ea5d7b9e46d0e83b73c8b912c86ad7f5ead00d" name="29ea5d7b9e46d0e83b73c8b912c86ad7f5ead00d" type="text" data-expect="company">
+
+    <label for="cf3e1d50d0fede72e3d7ff75f5efd49b9630e396">Phone Number*:</label>
+    <input id="cf3e1d50d0fede72e3d7ff75f5efd49b9630e396" name="cf3e1d50d0fede72e3d7ff75f5efd49b9630e396" type="tel" data-expect="phone">
+
+    <input type="submit" value="Submit">
+  </form>
+  <div id="err" hidden>REQUIRED</div>
+  <div id="ok" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('f').addEventListener('submit', function (e) {
+      e.preventDefault();
+      // The real form's validation: every starred field must hold something, and the name must
+      // not be an email address - which is exactly what it was receiving.
+      var vals = Array.from(document.querySelectorAll('#f input:not([type=submit])')).map(function (i) { return i.value.trim(); });
+      var name = vals[1];
+      if (vals.some(function (v) { return !v; }) || name.indexOf('@') !== -1) {
+        document.getElementById('err').hidden = false;
+        return;
+      }
+      document.getElementById('f').hidden = true;
+      document.getElementById('ok').hidden = false;
+    });
+  </script>
+</body></html>
