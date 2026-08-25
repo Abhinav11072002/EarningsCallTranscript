@@ -1,0 +1,154 @@
+{\rtf1\ansi\ansicpg1252\deff0\deflang1033{\fonttbl{\f0\fswiss\fcharset0 Calibri;}{\f1\fmodern\fcharset0 Consolas;}}{\colortbl ;\red0\green0\blue0;}\viewkind4\uc1\margl1134\margr1134\margt1134\margb1134
+\pard\qc\sa60\f0\fs44\b Running the Earnings-Call Automation on the Mac Minis\b0\par
+\pard\qc\sa360\f0\fs22\i A practical assessment and step-by-step plan\i0\par
+\pard\sa180\sb360\keepn\f0\fs36\b The short version\b0\par
+\pard\sa140\f0\fs22 It can be done, and most of the system moves across untouched. But this is a port, not a copy. Roughly 90% of the code is plain Node.js that runs anywhere; the remaining 10% is the part that makes recordings actually start, and it is written directly against the Windows API.\par
+\pard\sa140\f0\fs22 There is also one question that has to be answered before any of the work is worth starting, and it can be tested in about ten minutes on a single machine. It is covered in Step 1.\par
+\pard\brdrb\brdrs\brdrw10\brdrcf0\sa160\sb60\par
+\pard\sa180\sb360\keepn\f0\fs36\b Part 1 - What actually has to change\b0\par
+\pard\sa120\sb280\keepn\f0\fs26\b 1.1 The keystroke injector (the hard part)\b0\par
+\pard\sa140\f0\fs22 Every recording depends on one thing: Chrome must be given a real, operating-system-level keypress while the right tab is in front. This is not a convenience. Chrome only grants the extension permission to capture a tab in response to a genuine user gesture, so a simulated or scripted "click" is refused. That is why the current design goes to such lengths here.\par
+\pard\sa140\f0\fs22 On Windows this is \f1\fs18 src/send-shortcut.ps1\f0\fs22  - 262 lines of PowerShell calling directly into the Win32 API: SetForegroundWindow, AttachThreadInput, SendInput, EnumWindows. None of that exists on macOS. The file has to be replaced entirely.\par
+\pard\sa140\f0\fs22 \b The good news: \b0 the macOS equivalent is far simpler. Where Windows actively refuses to let a background process take the foreground - which is why that script has a retry loop and an ALT-tap workaround - macOS just does it:\par
+\pard\li360\sa20\sb100\f1\fs18
+tell application "Google Chrome" to activate\line
+tell application "System Events"\line
+    keystroke "y" using \{command down, shift down\}\line
+end tell
+\par
+\pard\sa140\f0\fs22 That is the whole thing. Perhaps twenty lines with error handling, replacing 262.\par
+\pard\sa120\sb280\keepn\f0\fs26\b 1.2 The Chrome flag check\b0\par
+\pard\sa140\f0\fs22 \f1\fs18 src/preflight.js\f0\fs22  inspects the running Chrome process to confirm it was launched with the flag that lets captures start without a consent prompt. It reads the Windows process table. On macOS the same information comes from \f1\fs18 ps -ax -o command\f0\fs22 . Small change, maybe fifteen lines.\par
+\pard\sa120\sb280\keepn\f0\fs26\b 1.3 The extension shortcut\b0\par
+\pard\sa140\f0\fs22 The extension currently defines only a Windows shortcut. It needs a Mac one added, because Ctrl is not the modifier macOS uses:\par
+\pard\li360\sa20\sb100\f1\fs18
+"commands": \{\line
+  "trigger-transcription-popup": \{\line
+    "suggested_key": \{\line
+      "default": "Ctrl+Shift+Y",\line
+      "mac": "Command+Shift+Y"\line
+    \},\line
+    "description": "Open the transcription popup"\line
+  \}\line
+\}
+\par
+\pard\sa140\f0\fs22 Worth checking that Chrome on macOS does not already use Command+Shift+Y for something. If it does, pick another combination - the exact keys do not matter, they only have to match what the config tells the injector to send.\par
+\pard\sa120\sb280\keepn\f0\fs26\b 1.4 Nothing else in the codebase is Windows-specific\b0\par
+\pard\sa140\f0\fs22 This is genuinely good news and it is worth stating plainly. I checked every source file: the only two that touch Windows are the two above. Everything else - reading the portal table, working out which calls are due, resolving webcast links, filling registration forms, walking Zoom and Teams join screens, the retry logic, the reporting - is ordinary cross-platform Node.js.\par
+\pard\brdrb\brdrs\brdrw10\brdrcf0\sa160\sb60\par
+\pard\sa180\sb360\keepn\f0\fs36\b Part 2 - The constraint that decides everything\b0\par
+\pard\sa120\sb280\keepn\f0\fs26\b 2.1 These machines cannot be treated as headless servers\b0\par
+\pard\sa140\f0\fs22 This is the most important point in the document.\par
+\pard\sa140\f0\fs22 Because the recording depends on a real keypress landing on a real window, each Mac mini needs a genuine graphical login session, awake, unlocked, with Chrome visible. A plain SSH connection has no desktop attached to it, so nothing you start over SSH alone will ever be able to record.\par
+\pard\sa140\f0\fs22 \b What this means in practice, per machine:\b0 \par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab Automatic login to a desktop session at boot - not a login screen waiting for a password\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab Sleep disabled, and the display prevented from sleeping\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab Screen lock and screen saver switched off\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab Chrome launched inside that desktop session, not from an SSH shell\par
+\pard\sa140\f0\fs22 Apple's own Screen Sharing helps here: unlike Windows Remote Desktop, disconnecting from a Mac over Screen Sharing leaves the desktop session running rather than locking it. So you can connect, check on things, and disconnect without stopping the work. That is a real advantage of Macs for this particular job.\par
+\pard\sa120\sb280\keepn\f0\fs26\b 2.2 macOS will ask for two permissions, once per machine\b0\par
+\pard\sa140\f0\fs22 macOS blocks synthetic keystrokes and screen access by default. Both must be granted by hand the first time, in System Settings > Privacy & Security:\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Accessibility\b0  - for whatever process sends the keystroke (Terminal, or the tool itself). Without it, the keystroke is silently swallowed and every recording fails to start.\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Screen Recording\b0  - Chrome needs this to capture tab audio.\par
+\pard\sa140\f0\fs22 These cannot be granted over SSH or by script; they need a few clicks on each machine. Budget for it, and do it once during setup.\par
+\pard\brdrb\brdrs\brdrw10\brdrcf0\sa160\sb60\par
+\pard\sa180\sb360\keepn\f0\fs36\b Part 3 - What are the seven machines for?\b0\par
+\pard\sa140\f0\fs22 This needs deciding before anything is installed, because it changes the work substantially.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Option A - Capacity: split the calls seven ways\b0\par
+\pard\sa140\f0\fs22 Each machine handles a seventh of the calls. Seven times the throughput, and no machine is doing much work at any moment.\par
+\pard\sa140\f0\fs22 \b The catch: \b0 right now every watcher reads the same table and decides independently what to record, keeping its own local record of what it has claimed. Two machines running as-is would both record the same call - duplicate transcripts, and two browsers fighting for the same webcast.\par
+\pard\sa140\f0\fs22 \b The fix is straightforward\b0  and needs no shared database. Give each machine a number, and have it ignore any call that is not "its own":\par
+\pard\li360\sa20\sb100\f1\fs18
+// config.local.json on machine 3 of 7\line
+\{ "shardIndex": 2, "shardCount": 7 \}\line
+\line
+// each machine keeps only the rows that hash to its own number\line
+if (hashOf(symbol) % shardCount !== shardIndex) continue;
+\par
+\pard\sa140\f0\fs22 Because the calculation depends only on the symbol, all seven machines reach the same conclusion without ever talking to each other. Machine 3 knows AAPL is not its job, and it knows that without asking anybody. Perhaps thirty lines of code and a test.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Option B - Redundancy: all seven watch everything\b0\par
+\pard\sa140\f0\fs22 More resilient to one machine dying, but they would all record every call seven times over. It needs a shared lock - a small database or file share that every machine checks before claiming a call. More moving parts, more that can fail, and a genuinely harder thing to get right.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Recommendation\b0\par
+\pard\sa140\f0\fs22 \b Start with Option A. \b0 It is simpler, needs no shared infrastructure, and the failure mode is mild: if one machine goes down you lose a seventh of that window's calls, and the reconciliation report on that machine tells you exactly which ones. You can always add redundancy later; you cannot easily remove complexity once it is in.\par
+\pard\brdrb\brdrs\brdrw10\brdrcf0\sa160\sb60\par
+\pard\sa180\sb360\keepn\f0\fs36\b Part 4 - Step by step\b0\par
+\pard\sa120\sb280\keepn\f0\fs26\b Step 1 - Prove the keystroke works (do this first, on ONE machine)\b0\par
+\pard\sa140\f0\fs22 \b Do not skip this and do not do it last. \b0 Everything else depends on it, and it is the one thing I cannot verify from here.\par
+\pard\sa140\f0\fs22 The question: when macOS sends a synthetic Command+Shift+Y, does Chrome treat it as a real user gesture and grant the extension permission to capture the tab?\par
+\pard\sa140\f0\fs22 This matters because we already know the equivalent question has a surprising answer on Windows. There, the obvious method - PowerShell's SendKeys - opened the popup but Chrome refused the capture, because SendKeys posts window messages rather than real input. Only the lower-level SendInput worked. macOS very likely behaves like SendInput, but "very likely" is not "verified".\par
+\pard\sa140\f0\fs22 \b The test, roughly ten minutes:\b0 \par
+\pard\fi-320\li640\sa100\f0\fs22 \b 1.\b0\tab Install Chrome and load the extension on one Mac mini.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 2.\b0\tab Add the Mac shortcut to the extension manifest (section 1.3) and reload it.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 3.\b0\tab Grant Accessibility and Screen Recording permissions.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 4.\b0\tab Open any page with audio - a YouTube video is ideal.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 5.\b0\tab From Terminal, run the AppleScript from section 1.1.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 6.\b0\tab Confirm the popup opens, then start a transcription and check that real text comes back.\par
+\pard\sa140\f0\fs22 \b If step 6 produces a transcript, the port is straightforward\b0  and everything below applies. If the popup opens but the capture is refused or silent, we need a different injection method, and we should regroup before spending time on the rest.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Step 2 - Prepare each machine\b0\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 1.\b0\tab \b Node.js 22 or newer.\b0  The tool checks this at startup and refuses to run on anything older, because the extension popup is driven over a WebSocket that older versions do not provide.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 2.\b0\tab \b Google Chrome\b0 , plus the extension loaded unpacked.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 3.\b0\tab \b Auto-login, no sleep, no screen lock\b0  (section 2.1).\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 4.\b0\tab \b Accessibility and Screen Recording permissions\b0  granted (section 2.2).\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 5.\b0\tab \b Log in to the admin portal in that Chrome profile\b0  and leave it logged in.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Step 3 - Install the extension at the SAME path on every machine\b0\par
+\pard\sa140\f0\fs22 A detail that will save real annoyance. Chrome derives an unpacked extension's ID from the folder it lives in, so the same folder path on every machine produces the same ID - and then one configuration file works everywhere. Different paths mean seven different IDs and seven different config files to keep straight.\par
+\pard\sa140\f0\fs22 Put it at exactly the same absolute path on all seven, for example \f1\fs18 /Users/fmp/extension\f0\fs22 . The tidier long-term answer is to package the extension properly so its ID is fixed regardless of location, which is worth doing eventually.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Step 4 - Deploy the code\b0\par
+\pard\li360\sa20\sb100\f1\fs18
+git clone <repo> ~/call-watcher\line
+cd ~/call-watcher/call-watcher\line
+npm install\line
+npm run test:unit          # ~1 second, no browser needed
+\par
+\pard\sa140\f0\fs22 If those tests pass, the machine-independent half of the system is working on that Mac. It is a genuinely useful checkpoint: it confirms Node, the code and the configuration are all sound before anything touches Chrome.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Step 5 - Configure each machine individually\b0\par
+\pard\sa140\f0\fs22 \f1\fs18 config.local.json\f0\fs22  is deliberately not stored in git, precisely so each machine can differ:\par
+\pard\li360\sa20\sb100\f1\fs18
+\{\line
+  "extensionId": "...",     // same everywhere if Step 3 was followed\line
+  "shardIndex": 2,          // 0 to 6 - unique per machine\line
+  "shardCount": 7\line
+\}
+\par
+\pard\sa120\sb280\keepn\f0\fs26\b Step 6 - Start Chrome with the required flags\b0\par
+\pard\li360\sa20\sb100\f1\fs18
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \\\line
+  --remote-debugging-port=9222 \\\line
+  --user-data-dir="$HOME/ChromeDebugProfile" \\\line
+  --auto-accept-this-tab-capture &
+\par
+\pard\sa140\f0\fs22 The last flag is the one people forget, and its absence is silent: everything appears to work, right up to the point where a system dialog no automation can dismiss blocks each capture. The tool checks for the flag at startup and complains loudly if it is missing.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Step 7 - Start the watcher, and keep it started\b0\par
+\pard\li360\sa20\sb100\f1\fs18
+npm run supervise
+\par
+\pard\sa140\f0\fs22 This restarts the watcher if it exits, and also if it is running but has gone blind - a stale heartbeat, a dropped Chrome connection, an expired portal session.\par
+\pard\sa140\f0\fs22 To have it start by itself at login, use a macOS Launch Agent (not a Launch Daemon - daemons run without a desktop, which is exactly what will not work here). A short plist in \f1\fs18 ~/Library/LaunchAgents/\f0\fs22  is enough. Pair it with \f1\fs18 caffeinate\f0\fs22  so the machine never sleeps mid-call.\par
+\pard\sa120\sb280\keepn\f0\fs26\b Step 8 - Verify each machine before trusting it\b0\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \f1\fs18 npm run test:unit\f0\fs22  - the logic, in about a second\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \f1\fs18 npm test\f0\fs22  - the full suite including browser-driven tests, a few minutes\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \f1\fs18 npm run report\f0\fs22  - at the end of the day, on each machine. The number to look at is "unaccounted": it should always be zero. Anything else means a call reached its window and left no trace, which is the one failure worth chasing.\par
+\pard\brdrb\brdrs\brdrw10\brdrcf0\sa160\sb60\par
+\pard\sa180\sb360\keepn\f0\fs36\b Part 5 - Effort, honestly\b0\par
+\pard\sa140\f0\fs22 Assuming the Step 1 test succeeds:\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Replace the keystroke injector\b0  - half a day, most of it verifying rather than writing\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Make the Chrome flag check cross-platform\b0  - an hour\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Add the shard filter\b0  - half a day with tests\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Set up the first machine end to end\b0  - half a day, mostly permissions and Chrome\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Each additional machine\b0  - an hour or so once the first is proven\par
+\pard\sa140\f0\fs22 Call it two to three days for a working seven-machine setup, plus a day of running it alongside the current Windows machine before relying on it.\par
+\pard\sa140\f0\fs22 \b If the Step 1 test fails, \b0 stop and tell me. The alternatives - a small native helper, or driving a hardware keyboard emulator - are a different and much larger piece of work, and we should decide together whether it is worth it.\par
+\pard\brdrb\brdrs\brdrw10\brdrcf0\sa160\sb60\par
+\pard\sa180\sb360\keepn\f0\fs36\b Part 6 - Things that will bite if nobody plans for them\b0\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b A locked screen stops everything.\b0  No desktop, no keystroke, no recording. This is the single most likely cause of a quiet, total failure.\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b A macOS update can reset privacy permissions\b0  and re-lock the machines. Worth checking after any update, and worth knowing when something stops working the morning after one.\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Seven machines mean seven sets of reports.\b0  Each one answers "did I get my share?" but nothing yet answers "did we get everything, across all seven?". Straightforward to add - the reports are plain files - but it does not exist today.\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b Each machine needs its own portal login session\b0  and each will expire independently.\par
+\pard\fi-260\li520\sa100\f0\fs22 \bullet\tab \b The Windows machine and the Macs must not both record the same calls.\b0  If it stays running, give it a shard number too.\par
+\pard\brdrb\brdrs\brdrw10\brdrcf0\sa160\sb60\par
+\pard\sa180\sb360\keepn\f0\fs36\b What I would do next\b0\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 1.\b0\tab Run the Step 1 keystroke test on one Mac mini. Nothing else is worth starting until that question is answered, and it takes about ten minutes.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 2.\b0\tab Tell me the result. If it works, I will write the Mac injector, make the flag check cross-platform, and add the shard filter - with tests, as with everything else here.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 3.\b0\tab Set up one machine completely and run it for a day beside the existing one, comparing the reports from both.\par
+\pard\fi-320\li640\sa100\f0\fs22 \b 4.\b0\tab Roll out to the remaining six, which should be mostly repetition at that point.\par
+}
