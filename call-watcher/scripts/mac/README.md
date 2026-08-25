@@ -46,9 +46,25 @@ turn it off — a decision worth making deliberately rather than by accident.
 
 ```bash
 cd ~/EarningsCallTranscript/call-watcher
+mkdir -p ~/Library/LaunchAgents
 sed "s/USERNAME/$(whoami)/g" scripts/mac/com.fmp.callwatcher.plist > ~/Library/LaunchAgents/com.fmp.callwatcher.plist
-chmod +x scripts/mac/start-mac.sh
 launchctl load ~/Library/LaunchAgents/com.fmp.callwatcher.plist
+```
+
+No `chmod` step: the script is committed executable. It used to need one, and that turned out
+to matter - git tracks the executable bit, so running `chmod +x` on a file committed without it
+leaves a permanent local modification, and every later `git pull` refuses to update that file:
+
+```
+error: Your local changes to the following files would be overwritten by merge
+```
+
+Which meant a machine silently stopped receiving fixes to the very script being fixed. If a
+machine is already in that state, discard the mode change and pull again:
+
+```bash
+git checkout -- call-watcher/scripts/mac/start-mac.sh
+git pull
 ```
 
 Check it took:
