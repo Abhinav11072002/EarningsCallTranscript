@@ -188,6 +188,10 @@ const POPUP_GRACE_MS = 600;
 const CLICKABLE_SELECTOR =
   'button:visible, input[type=submit]:visible, input[type=button]:visible, a[role=button]:visible, a[href]:visible';
 
+// Words that mean a field is NOT a person's name, however much it looks like one.
+const NOT_A_PERSON_NAME_PATTERN =
+  /company|organi|business|firm|institution|file|user|screen|domain|host|event|account/i;
+
 const CLICK_TIMEOUT_MS = 5000;
 // A rendered select's options exist already; waiting longer cannot make a missing one appear.
 const SELECT_TIMEOUT_MS = 2000;
@@ -213,6 +217,46 @@ const REGISTRATION_BUTTON_PATTERN = /register|registration|sign\s*in|log\s*in|ac
 // matching IRRELEVANT_FIELD_PATTERN (or a search box) is dropped entirely; anything inside site
 // chrome is demoted to a fallback rather than dropped, so a gate that genuinely lives in a
 // footer still works while a footer newsletter never gets touched.
+// A field that is plainly a name, that the strict patterns did not claim.
+//
+// FIELD_PATTERNS deliberately requires "name" at a word start or after a space, because a
+// looser rule swallows "company_name", "file_name" and "username" - all of which want
+// different values or none at all. That strictness costs the plain single-name field some
+// forms use instead of a first/last pair: an id like "txtName" or "attendeeName" has no
+// separator before "name", so nothing matched it and the field was left empty. Seen live on
+// ELMD, where the whole registration failed for want of one name.
+//
+// So this is a LAST resort, applied only when no name field of any kind was matched, and only
+// when exactly one candidate remains. If a form has two unclaimed name-ish fields we cannot
+// tell which is which, and filling either would be a guess.
+const NAME_ISH_PATTERN = /name/i;
+
+async function findLoneNameField(frame, identity, alreadyMatched) {
+  if (!identity.fullName) return null;
+  // Only when the form gave us no name at all - never in preference to a real match.
+  if (alreadyMatched.some((k) => k === 'firstName' || k === 'lastName' || k === 'fullName')) return null;
+
+  const fields = await frame.$$('input:visible').catch(() => []);
+  const candidates = [];
+  for (const el of fields) {
+    const type = ((await el.getAttribute('type')) || 'text').toLowerCase();
+    if (!['text', 'search', ''].includes(type)) continue;
+    if (await el.isDisabled().catch(() => false)) continue;
+    if ((await el.inputValue().catch(() => '')) !== '') continue;
+    if (await isOffscreen(el)) continue;
+    if (await isFurniture(el)) continue;
+
+    const description = await describeField(el);
+    if (!NAME_ISH_PATTERN.test(description)) continue;
+    if (NOT_A_PERSON_NAME_PATTERN.test(description)) continue;
+    if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
+    candidates.push({ el, description, key: 'fullName', tag: 'input' });
+  }
+
+  // Exactly one, or we would be guessing.
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 async function collectFillableFields(frame, identity, allowFurnitureFallback) {
   const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
   const primary = [];
@@ -230,12 +274,27 @@ async function collectFillableFields(frame, identity, allowFurnitureFallback) {
     if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
     const key = matchField(description);
     if (!key || identity[key] === undefined) continue;
+    // "Attachment file name" ends in " name", which the fullName pattern matches - so a file
+    // field was being filled with a person's name. The same trap catches "screen name",
+    // "username" and "host name". Only the person-name keys are guarded: "Company name"
+    // resolves to `company` on its own and must stay fillable.
+    if (['firstName', 'lastName', 'fullName'].includes(key) && NOT_A_PERSON_NAME_PATTERN.test(description)) {
+      continue;
+    }
 
     const entry = { el, tag, description, key };
     if (await isFurniture(el)) fallback.push(entry);
     else primary.push(entry);
   }
-  if (primary.length) return primary;
+  if (primary.length) {
+    // A form may pair a matched field with an unmatched lone "Name" - so this runs even when
+    // other fields matched, just never when a name field already did.
+    const lone = await findLoneNameField(frame, identity, primary.map((p) => p.key));
+    if (lone) primary.push(lone);
+    return primary;
+  }
+  const lone = await findLoneNameField(frame, identity, []);
+  if (lone) return [lone];
   if (!allowFurnitureFallback) return [];
   // The furniture fallback exists for a gate that genuinely lives in a footer. But when the page
   // offers a real registration BUTTON outside the chrome, this is a button-only gate (the Q4

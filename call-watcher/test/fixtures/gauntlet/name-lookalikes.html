@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><title>Q3 2026 Earnings Call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <form id="f">
+    <label for="first">First name</label><input id="first" data-expect="firstName">
+    <label for="last">Last name</label><input id="last" data-expect="lastName">
+    <label for="em">Email</label><input id="em" type="email" data-expect="email">
+    <label for="companyName">Company name</label><input id="companyName" data-expect="company">
+    <label for="fileName">Attachment file name</label><input id="fileName" data-expect="none">
+    <button type="submit">Register</button>
+  </form>
+  <div id="ok" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('f').addEventListener('submit', function (e) {
+      e.preventDefault();
+      document.getElementById('f').hidden = true;
+      document.getElementById('ok').hidden = false;
+    });
+  </script>
+</body></html>
