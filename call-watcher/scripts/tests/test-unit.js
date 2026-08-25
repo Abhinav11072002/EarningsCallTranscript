@@ -1357,12 +1357,19 @@ check('the macOS injector script is present and takes the arguments we pass it',
   assert.ok(!/command down/.test(text), 'must never send Command - see shortcutKeys.js');
 });
 
-check('the Windows shortcut command is unchanged by the macOS branch', () => {
-  // The Windows path is proven in production. Adding macOS support must not perturb it by so
-  // much as an argument, so the whole vector is pinned rather than spot-checked.
-  const command = buildShortcutCommand('^+y', { cdpUrl: 'http://localhost:9222' }, 'ACME Q2 2026');
+// The platform is a PARAMETER, not read from the host, so both branches are exercised wherever
+// the suite runs. The first version of this test read process.platform and therefore only ever
+// checked one branch - it passed on Windows and failed on the first Mac it met, reporting a
+// fault in the code when the fault was in the test.
+const SHORTCUT_CONFIG = { cdpUrl: 'http://localhost:9222' };
+
+check('shortcut command: the Windows form is unchanged by the macOS branch', () => {
+  // The Windows path is proven in production, so the whole vector is pinned rather than
+  // spot-checked - adding macOS support must not perturb it by so much as an argument.
+  const command = buildShortcutCommand('^+y', SHORTCUT_CONFIG, 'ACME Q2 2026', 'win32');
   assert.strictEqual(command.file, 'powershell.exe');
   assert.strictEqual(command.label, 'send-shortcut.ps1');
+  assert.strictEqual(command.diagnosticsOnStderr, false, 'PowerShell logs to stdout');
 
   const args = command.args;
   assert.deepStrictEqual(args.slice(0, 5), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']);
@@ -1370,8 +1377,33 @@ check('the Windows shortcut command is unchanged by the macOS branch', () => {
   assert.deepStrictEqual(args.slice(6), ['-Port', '9222', '-Keys', '^+y', '-TitleHint', 'ACME Q2 2026']);
 
   // The hint is genuinely optional - it is omitted when a page has no title.
-  const noHint = buildShortcutCommand('^+y', { cdpUrl: 'http://localhost:9222' }, '');
-  assert.ok(!noHint.args.includes('-TitleHint'));
+  assert.ok(!buildShortcutCommand('^+y', SHORTCUT_CONFIG, '', 'win32').args.includes('-TitleHint'));
+});
+
+check('shortcut command: the macOS form matches what the AppleScript expects', () => {
+  const command = buildShortcutCommand('^+y', SHORTCUT_CONFIG, 'ACME Q2 2026', 'darwin');
+  assert.strictEqual(command.file, 'osascript');
+  assert.strictEqual(command.label, 'send-shortcut.applescript');
+  assert.strictEqual(command.diagnosticsOnStderr, true, 'osascript logs to stderr');
+
+  const args = command.args;
+  assert.ok(args[0].endsWith('send-shortcut.applescript'), 'must point at the AppleScript injector');
+  // key, control, shift, option, titleHint - the positional order the script reads.
+  assert.deepStrictEqual(args.slice(1), ['y', '1', '1', '0', 'ACME Q2 2026']);
+  assert.ok(!args.includes('powershell.exe'));
+
+  // The hint is passed as an empty string rather than dropped: the script reads it positionally,
+  // so omitting it would shift every argument after it.
+  assert.deepStrictEqual(buildShortcutCommand('^+y', SHORTCUT_CONFIG, '', 'darwin').args.slice(1), ['y', '1', '1', '0', '']);
+});
+
+check('shortcut command: the two platforms send the SAME combination', () => {
+  // Ctrl+Shift+Y on both. If these ever diverge, one platform is silently sending a
+  // combination the extension is not listening for.
+  const win = buildShortcutCommand('^+y', SHORTCUT_CONFIG, '', 'win32');
+  const mac = buildShortcutCommand('^+y', SHORTCUT_CONFIG, '', 'darwin');
+  assert.strictEqual(win.args[win.args.indexOf('-Keys') + 1], '^+y');
+  assert.deepStrictEqual(mac.args.slice(1, 5), ['y', '1', '1', '0']); // y, ctrl, shift, no option
 });
 
 // ---------------------------------------------------------------- report

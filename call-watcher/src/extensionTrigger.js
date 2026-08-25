@@ -15,14 +15,17 @@ const SEND_SHORTCUT_APPLESCRIPT = path.join(__dirname, 'send-shortcut.applescrip
 // window-message keystrokes focus the window but never fire the extension command. macOS just
 // honours `activate`, and AppleScript's keystroke goes through the same path as real hardware.
 // Both were verified on their own machines; neither approach works on the other platform.
-function buildShortcutCommand(sendKeysSequence, config, titleHint) {
-  if (process.platform === 'darwin') {
+function buildShortcutCommand(sendKeysSequence, config, titleHint, platform = process.platform) {
+  if (platform === 'darwin') {
     const parsed = parseSendKeys(sendKeysSequence);
     return {
       file: 'osascript',
       args: [SEND_SHORTCUT_APPLESCRIPT, ...toAppleScriptArgs(parsed), titleHint || ''],
       label: 'send-shortcut.applescript',
       shortcut: describeShortcut(parsed),
+      // osascript writes its `log` output to stderr; PowerShell writes to stdout. Recorded here
+      // so the caller does not have to ask what platform it is on a second time.
+      diagnosticsOnStderr: true,
     };
   }
   // Windows identifies the target Chrome by its --remote-debugging-port, which is unambiguous
@@ -39,6 +42,7 @@ function buildShortcutCommand(sendKeysSequence, config, titleHint) {
     args,
     label: 'send-shortcut.ps1',
     shortcut: sendKeysSequence,
+    diagnosticsOnStderr: false,
   };
 }
 
@@ -73,7 +77,7 @@ function sendGlobalShortcut(sendKeysSequence, config, titleHint, logger) {
       // attribute to a time and therefore never prunes.
       // osascript writes its `log` output to stderr, PowerShell to stdout - so both are read
       // here, and the diagnostics survive on either platform rather than vanishing on one.
-      const streams = [stdout, process.platform === 'darwin' ? stderr : ''];
+      const streams = [stdout, command.diagnosticsOnStderr ? stderr : ''];
       const out = streams.join('\n').trim().split(/\r?\n/).filter(Boolean).join(' | ');
       if (out && !err) logger.info(`${command.label}: ${out}`);
       if (err) {
