@@ -220,6 +220,10 @@ Launching Chrome, all on one line:
 `--user-data-dir` creates a **separate, empty profile**, so the extension has to be loaded and
 the portal logged into once inside it.
 
+For unattended operation - auto-login, no sleep, a Launch Agent that survives a reboot - see
+[scripts/mac/README.md](scripts/mac/README.md). The short version is that a locked screen stops
+everything, and it stops it silently.
+
 Two things macOS requires that Windows does not:
 
 - **Accessibility permission** for whatever process sends the keystroke, in System Settings >

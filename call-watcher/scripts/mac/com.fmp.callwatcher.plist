@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Launch AGENT, not a Launch Daemon. The distinction matters more than anything else in this
+  file: a daemon runs without a desktop session, and this system cannot work without one. The
+  capture depends on a keystroke landing on a real window, so a daemon would poll happily and
+  fail at the final step of every single call.
+
+  Install:
+    cp scripts/mac/com.fmp.callwatcher.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.fmp.callwatcher.plist
+
+  The two paths below are placeholders - replace USERNAME with the account this runs as.
+  ~ is not expanded inside a plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fmp.callwatcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/USERNAME/EarningsCallTranscript/call-watcher/scripts/mac/start-mac.sh</string>
+    </array>
+
+    <!-- Start at login, and start again if it ever exits. start-mac.sh is written to be safe to
+         re-enter: it will not open a second Chrome or disturb a healthy watcher. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Ten seconds between restarts. Without it, a script that fails immediately - a wrong
+         path, a missing Node - would be relaunched in a tight loop, filling the log with the
+         same line thousands of times and burying the one that explains why. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Separate from the watcher's own logs in data/. This captures what happens BEFORE the
+         watcher starts, which is exactly where a failed launch shows up. -->
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/EarningsCallTranscript/call-watcher/data/launchagent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/EarningsCallTranscript/call-watcher/data/launchagent.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/EarningsCallTranscript/call-watcher</string>
+
+    <!-- launchd gives a job a minimal PATH that does not include Homebrew, so `node` would not
+         be found even though it works perfectly in a terminal. This is the single most common
+         reason a Launch Agent fails while the same script runs fine by hand. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
