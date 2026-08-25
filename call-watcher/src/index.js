@@ -451,6 +451,12 @@ async function main() {
   // produced a frightening ERROR on every single restart, which is exactly how people learn to
   // ignore the one that matters. These only speak up once a state has persisted.
   const blindFor = { noRows: 0, noLinks: 0, noReadableTimes: 0 };
+  // Whether the last LOGGED poll line reported a blind table. The routine line appears on the
+  // first poll and every thirtieth after, which is quiet enough for a whole day - but it meant
+  // a startup that read zero rows announced that and then said nothing for ten minutes, while
+  // polls two through twenty-nine were perfectly healthy. The last word on screen was the
+  // alarming one. Recovery is now reported the moment it happens.
+  let lastLoggedWasBlind = false;
   const BLIND_POLLS_BEFORE_ALARM = 3;
   const poll = async () => {
     if (pollRunning) {
@@ -487,8 +493,15 @@ async function main() {
 
     pollCount++;
     const withLinks = rows.filter((r) => r.dialinLink).length;
-    if (pollCount === 1 || pollCount % 30 === 0) {
-      logger.info(`Poll #${pollCount}: watching ${rows.length} row(s), ${withLinks} with a dial-in link.`);
+    const blindNow = rows.length === 0 || withLinks === 0;
+    // Log on the first poll, periodically, and on any change into or out of a blind reading -
+    // so "0 rows" is always followed by whatever happened next, rather than by silence.
+    if (pollCount === 1 || pollCount % 30 === 0 || blindNow !== lastLoggedWasBlind) {
+      const recovered = lastLoggedWasBlind && !blindNow ? ' (recovered)' : '';
+      logger.info(
+        `Poll #${pollCount}: watching ${rows.length} row(s), ${withLinks} with a dial-in link.${recovered}`
+      );
+      lastLoggedWasBlind = blindNow;
     }
     // Escalate the two states that are indistinguishable from a quiet day in the log but mean
     // we are blind: a renamed column header or an expired portal session both yield rows we
