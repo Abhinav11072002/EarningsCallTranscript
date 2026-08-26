@@ -22,6 +22,7 @@ const { createObservability } = require('../../src/observability');
 const { SeenLog, reconcile, formatReconciliation } = require('../../src/reconciliation');
 const { blindReason } = require('../../src/supervisorRules');
 const { validateConfig } = require('../../src/validateConfig');
+const { judgeRelevance, symbolAppearsAsWord } = require('../../src/pageRelevance');
 const { parseSendKeys, toAppleScriptModifiers, toAppleScriptArgs, describeShortcut } = require('../../src/shortcutKeys');
 const { macCommand, windowsCommand } = require('../../src/preflight');
 const { acquireInstanceLock, releaseInstanceLock, refreshInstanceLock, lockPathFor } = require('../../src/instanceLock');
@@ -1476,6 +1477,118 @@ check('supervisor: it acts on the debounced flag, so a booting page is not a res
 
   const genuinelyBlind = { pid: 42, updatedAt: new Date().toISOString(), warnings: { noRows: true } };
   assert.match(blindReason(genuinelyBlind, { pid: 42 }), /zero rows/);
+});
+
+// ---------------------------------------------------------------- is this really the call
+
+// These are the ACTUAL page titles from the day this went wrong: 26 captures, of which 7 had no
+// audio at all. Five were registration pages and two were company homepages, and every one of
+// them recorded twenty minutes of silence while reporting success - which is worse than failing,
+// because nothing downstream can tell that transcript from a real one.
+//
+// The titles are kept verbatim rather than paraphrased. They are the only evidence of what the
+// check has to survive.
+const REAL_CAPTURES = [
+  // Genuinely in the call - all had a player.
+  { symbol: 'MPCC.OL', fp: '2026Q2', title: 'MPC Container Ships Audiocast Q2 2026', player: true, want: true },
+  { symbol: 'MPZZF', fp: '2026Q2', title: 'MPC Container Ships Audiocast Q2 2026', player: true, want: true },
+  { symbol: 'SWON.SW', fp: '2026Q2', title: 'Webcast | SoftwareOne H1 2026 Results', player: true, want: true },
+  { symbol: 'HDL', fp: '2026Q2', title: 'Super Hi Second Quarter 2026 Financial Results Conference Call', player: true, want: true },
+  { symbol: 'TIGR', fp: '2026Q2', title: 'UP Fintech Holding Limited Q2 2026 Earnings Conference Call', player: true, want: true },
+  { symbol: 'ANF', fp: '2026Q2', title: 'Abercrombie & Fitch Co. Second Quarter 2026 Earnings Conference Call', player: true, want: true },
+  { symbol: 'BBWI', fp: '2026Q2', title: 'Q2 2026 Bath & Body Works Earnings Conference Call', player: true, want: true },
+  { symbol: 'PLAB', fp: '2026Q3', title: 'Photronics Q2 - FY26 Earnings', player: true, want: true },
+  { symbol: 'DY', fp: '2027Q2', title: 'Dycom Industries, Inc. Q2 2027 Results Conference Call', player: true, want: true },
+  { symbol: 'KSS', fp: '2026Q2', title: "Q2 2026 Kohl's Corporation Earnings Conference Call - Q4", player: true, want: true },
+  { symbol: 'SJM', fp: '2027Q1', title: 'Webcast | J.M. Smucker Co. FY27 Q1 Earnings Q&A Webcast', player: true, want: true },
+  { symbol: 'TRMD', fp: '2026Q2', title: 'TORM Second Quarter 2026 Results - Q4', player: true, want: true },
+  { symbol: 'VIG.VI', fp: '2026Q2', title: 'Webcast | Results for the first half-year 2026', player: true, want: true },
+  { symbol: 'DCI', fp: '2026Q4', title: 'Donaldson Company Q4 FY26 Earnings Webcast - Q4', player: true, want: true },
+  { symbol: 'WSM', fp: '2026Q2', title: 'Williams-Sonoma, Inc. Q2 2026 Earnings Conference Call - Q4', player: true, want: true },
+  { symbol: 'NA.TO', fp: '2026Q3', title: 'National Bank of Canada Third Quarter 2026 Earnings Results', player: true, want: true },
+
+  // The seven that recorded silence. No player on any of them.
+  { symbol: '2390.HK', fp: '2026Q2', title: 'Conference Registration', player: false, want: false },
+  { symbol: 'LI', fp: '2026Q2', title: 'Diamond Pass Registration', player: false, want: false },
+  { symbol: 'LITB', fp: '2026Q2', title: 'Event Registration', player: false, want: false },
+  { symbol: '2015.HK', fp: '2026Q2', title: 'Diamond Pass Registration', player: false, want: false },
+  { symbol: 'JKS', fp: '2026Q2', title: 'Diamond Pass Registration', player: false, want: false },
+  { symbol: 'MOV', fp: '2027Q2', title: 'Movado Group, Inc. Corporate Website Homepage', player: false, want: false },
+  { symbol: 'SFL', fp: '2026Q2', title: 'Home', player: false, want: false },
+];
+
+check('pageRelevance: every one of the 26 real captures is judged correctly', () => {
+  const wrong = [];
+  for (const c of REAL_CAPTURES) {
+    const verdict = judgeRelevance({
+      title: c.title,
+      url: 'https://provider.example/session',
+      text: c.title,
+      hasPlayer: c.player,
+      symbol: c.symbol,
+      year: c.fp.slice(0, 4),
+      period: c.fp.slice(4),
+    });
+    if (verdict.accepted !== c.want) wrong.push(`${c.symbol}: ${JSON.stringify(c.title)} -> ${verdict.accepted}`);
+  }
+  assert.deepStrictEqual(wrong, [], `misjudged: ${wrong.join(' | ')}`);
+});
+
+check('pageRelevance: no player means nothing to record, whatever else matches', () => {
+  // The load-bearing rule. A page can name the company AND the quarter and still be a
+  // registration confirmation handing out a telephone number - Chorus Call's Diamond Pass does
+  // exactly that, and no amount of waiting makes such a tab produce audio.
+  const verdict = judgeRelevance({
+    title: 'Abercrombie & Fitch Co. Q2 2026 Earnings Conference Call',
+    url: 'https://provider.example/x',
+    text: 'ANF Q2 2026 dial in 1-800-555-0100 PIN 4821',
+    hasPlayer: false,
+    symbol: 'ANF',
+    year: '2026',
+    period: 'Q2',
+  });
+  assert.strictEqual(verdict.accepted, false);
+  assert.match(verdict.reason, /no audio or video player|telephone dial-in/);
+});
+
+check('pageRelevance: a registration title is refused even with a player on the page', () => {
+  // Belt and braces: the title rule runs before the player rule, so a registration page that
+  // happens to embed a video still cannot be mistaken for the call.
+  for (const title of ['Diamond Pass Registration', 'Conference Registration', 'Event Registration', 'Home', 'Movado Group, Inc. Corporate Website Homepage']) {
+    const v = judgeRelevance({ title, url: 'https://x.example/', text: title, hasPlayer: true, symbol: 'ANF', year: '2026', period: 'Q2' });
+    assert.strictEqual(v.accepted, false, `should refuse: ${title}`);
+  }
+});
+
+check('pageRelevance: a ticker must appear as a word, and short ones are not evidence alone', () => {
+  // "LI" as a substring matches "public", "listen" and "quality", so a two-letter ticker made
+  // almost any page look like the right one. That is how LI 2026Q2 accepted a registration page.
+  assert.ok(!symbolAppearsAsWord('the public listen quality link', 'li'), 'substring must not count');
+  assert.ok(symbolAppearsAsWord('welcome to the LI earnings call', 'li'), 'a whole word does');
+
+  // Even as a word, two letters are not enough on their own - it needs the quarter or the year.
+  const shortOnly = judgeRelevance({
+    title: 'LI', url: 'https://x.example/s', text: 'LI', hasPlayer: true, symbol: 'LI', year: '2026', period: 'Q2',
+  });
+  assert.strictEqual(shortOnly.accepted, false, 'a bare two-letter ticker is not identification');
+
+  // A longer ticker as a word is.
+  const longer = judgeRelevance({
+    title: 'TIGR investor session', url: 'https://x.example/s', text: 'TIGR', hasPlayer: true, symbol: 'TIGR', year: '2099', period: 'Q9',
+  });
+  assert.ok(longer.accepted);
+  assert.match(longer.reason, /ticker "tigr" as a word/);
+});
+
+check('pageRelevance: a player with no identity at all is refused unless it is the portal link', () => {
+  const base = { title: 'webinar.net', url: 'https://app.webinar.net/OM3bGdQ8gY1', text: 'webinar.net', hasPlayer: true, symbol: 'NSSC', year: '2026', period: 'Q4' };
+  // Nothing ties it to the call, and it is not the host we were sent to.
+  assert.strictEqual(judgeRelevance({ ...base, dialinUrl: 'https://elsewhere.example/x' }).accepted, false);
+  // But NSSC 2026Q4's real page was exactly this, on exactly the host the portal gave us - a
+  // legitimate player whose title names neither company nor quarter. It must still record.
+  const onPortalHost = judgeRelevance({ ...base, dialinUrl: 'https://app.webinar.net/OM3bGdQ8gY1' });
+  assert.ok(onPortalHost.accepted, 'the portal-supplied host with a player must be accepted');
+  assert.match(onPortalHost.reason, /host the portal/);
 });
 
 // ---------------------------------------------------------------- report

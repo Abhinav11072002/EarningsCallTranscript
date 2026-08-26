@@ -2,6 +2,7 @@ const { execFile } = require('child_process');
 const path = require('path');
 const http = require('http');
 const { describeJoinBlocker } = require('./joinFlow');
+const { judgeRelevance, playerProbe } = require('./pageRelevance');
 const { parseSendKeys, toAppleScriptArgs, describeShortcut } = require('./shortcutKeys');
 
 // Both beside this file on purpose. They are runtime code, not tooling: every capture depends
@@ -305,29 +306,14 @@ const REPLAY_TITLE_PATTERN = /\breplay\b|\barchive[sd]?\b|on-?demand|\btranscrip
 // call all confirmed as "started" and were logged Done. Because capture is auto-accepted there
 // is no human gate either.
 //
-// Deliberately permissive: it looks for the ticker root OR a quarter token anywhere in the
-// title/URL/visible text, and only refuses when it finds NOTHING relevant. A false refusal
-// costs one retry and a loud log line; a false accept costs the transcript.
+// The judgement is in pageRelevance.js; this does the browser work and the refusing. It was
+// deliberately permissive once, on the reasoning that a false refusal costs one retry while a
+// false accept costs a transcript. That reasoning was right and the implementation was not: on
+// a full day it accepted 7 pages out of 26 that had no audio at all, each recording silence and
+// reporting success. Permissive about WHICH call, strict about whether there is a call.
 async function assertPageLooksRelevant(page, row, logger, config, dialinUrl) {
-  const { year, period } = splitFiscalPeriod(row.fiscalPeriod);
-  const symbolRoot = String(row.symbol || '')
-    .split(/[.\-^]/)[0]
-    .toLowerCase();
-
-  const probe = await page
-    .evaluate(() => ({
-      title: document.title || '',
-      url: location.href,
-      text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 4000),
-      hasMedia: Boolean(document.querySelector('video, audio, [class*=player], [id*=player], iframe')),
-    }))
-    .catch(() => null);
+  const probe = await page.evaluate(playerProbe).catch(() => null);
   if (!probe) return; // cannot inspect; the other guards still apply
-
-  const haystack = `${probe.title} ${probe.url} ${probe.text}`.toLowerCase();
-  const symbolMatch = Boolean(symbolRoot && symbolRoot.length >= 2 && haystack.includes(symbolRoot));
-  const yearMatch = Boolean(year && haystack.includes(String(year)));
-  const periodMatch = Boolean(period && haystack.includes(String(period).toLowerCase()));
 
   if (REPLAY_TITLE_PATTERN.test(probe.title)) {
     throw new Error(`Refusing to record: page looks like a replay/archive, not the live call ("${probe.title}")`);
@@ -346,49 +332,36 @@ async function assertPageLooksRelevant(page, row, logger, config, dialinUrl) {
     );
   }
 
-  // The year ALONE is far too weak - almost any page mentions the current year (the admin portal
-  // itself does, which is how an earlier, looser version of this check passed on a page that had
-  // nothing to do with the call). Accept only a genuine identifier: the ticker, or the quarter
-  // AND year together, or a player element accompanied by one of them.
-  // The portal's own dial-in link is authoritative: if we are still on the host it pointed at,
-  // no resolution decision was made that could have gone wrong, and there is nothing for this
-  // check to catch. Observed live on NSSC 2026Q4 - app.webinar.net serves a player whose title
-  // is just "webinar.net" and whose visible text names neither the ticker nor the quarter, so
-  // the identity tiers below refused it on every retry until the call was gone. A false accept
-  // costs one transcript; a false refusal costs the call itself, and the call does not repeat.
-  // The bad-title, replay and pre-join checks above still apply, so a dead or wrong-state page
-  // on the right host is still refused.
-  let sameHostAsDialin = false;
-  try {
-    if (dialinUrl) sameHostAsDialin = new URL(probe.url).hostname === new URL(dialinUrl).hostname;
-  } catch {
-    sameHostAsDialin = false;
-  }
+  // The judgement itself lives in pageRelevance.js as a pure function, tested against the real
+  // page titles from the run where it got 7 of 26 wrong. What it turns on now is whether the
+  // page has anything that can PLAY: all 19 genuine captures did, and all 7 empty ones - five
+  // registration pages and two company homepages - did not.
+  const { year: fpYear, period: fpPeriod } = splitFiscalPeriod(row.fiscalPeriod);
+  const verdict = judgeRelevance({
+    title: probe.title,
+    url: probe.url,
+    text: probe.text,
+    hasPlayer: probe.hasPlayer,
+    symbol: row.symbol,
+    year: fpYear,
+    period: fpPeriod,
+    dialinUrl,
+  });
 
-  const accepted = symbolMatch
-    ? `symbol "${symbolRoot}"`
-    : yearMatch && periodMatch
-      ? `${period} ${year}`
-      : probe.hasMedia && (yearMatch || periodMatch)
-        ? `a player element plus ${periodMatch ? period : year}`
-        : sameHostAsDialin
-          ? `it being the dial-in link the portal gave us (${new URL(probe.url).hostname})`
-          : null;
-
-  if (!accepted) {
+  if (!verdict.accepted) {
     const message =
-      `page does not identifiably belong to ${row.symbol} ${row.fiscalPeriod} ` +
-      `(title "${probe.title}", url ${probe.url}) - resolution probably landed on the wrong page`;
-    // Escapable without a code change: if a legitimate minimal player page (one that names
-    // neither the company nor the quarter) ever trips this, set requirePageRelevance=false in
-    // config.local.json to downgrade it to a warning rather than editing the check out.
+      `${verdict.reason} (title "${probe.title}", url ${probe.url}) - ` +
+      `refusing to record ${row.symbol} ${row.fiscalPeriod}`;
+    // Escapable without a code change: if a legitimate call page is ever refused, set
+    // requirePageRelevance=false in config.local.json to downgrade this to a warning rather
+    // than editing the check out.
     if (config && config.requirePageRelevance === false) {
       logger.warn(`Relevance check would have refused this page, but is disabled: ${message}`);
       return;
     }
     throw new Error(`Refusing to record: ${message}`);
   }
-  logger.info(`Target page relevance check passed on ${accepted}.`);
+  logger.info(`Target page relevance check passed on ${verdict.reason}.`);
 }
 
 // Brings the call tab to front, triggers the popup via the global shortcut, then finds and
