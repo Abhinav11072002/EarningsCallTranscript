@@ -35,4 +35,40 @@ function shouldSkipAsLate({ minsLeft, record, lateStartGraceMinutes = 0 }) {
   };
 }
 
-module.exports = { shouldSkipAsLate };
+// Whether a capture that has stopped should be restarted NOW.
+//
+// The flow is deliberately: join early, set the recording going, move on to the next call. A
+// capture already running cannot miss the opening remarks, which is the whole point of starting
+// before the call does.
+//
+// What that flow runs into is the extension stopping a stream after about ten minutes of
+// silence. Join at T-15, and by T-5 - with nobody yet speaking - the stream is gone. The poll
+// loop saw a started call with no stream, concluded it had died, and reacquired: a new tab, the
+// old one closed, another attempt spent. Then the same thing again five minutes later. By the
+// time the call actually began, all four attempts were used and the call was marked as given up.
+//
+// So before the call starts, a missing stream is not evidence of anything going wrong. Nothing
+// is being lost by waiting - there is no audio yet to miss - and restarting into the same
+// silence only repeats the problem while burning the attempts that will be needed later.
+//
+// Once the call is under way, a missing stream means exactly what it used to, and reacquiring
+// promptly is right.
+function shouldReacquireNow({ minsLeft, reacquireGraceMinutes = 30, startsWithinMinutes = 1 }) {
+  // Long past the start: the call is simply over. The caller treats this as terminal.
+  if (minsLeft <= -reacquireGraceMinutes) return { reacquire: false, reason: 'call is over' };
+
+  // Not started yet. Wait for it rather than restarting into silence.
+  if (minsLeft > startsWithinMinutes) {
+    return {
+      reacquire: false,
+      waiting: true,
+      reason:
+        `the call has not started yet (${minsLeft.toFixed(0)} min away), so a stopped stream is ` +
+        'the extension timing out on silence rather than anything going wrong',
+    };
+  }
+
+  return { reacquire: true, reason: 'the call is under way and nothing is recording it' };
+}
+
+module.exports = { shouldSkipAsLate, shouldReacquireNow };

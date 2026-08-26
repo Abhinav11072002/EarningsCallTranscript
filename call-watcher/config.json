@@ -11,6 +11,7 @@
   "shortcutTimeoutMs": 30000,
   "lateStartGraceMinutes": 0,
   "reacquireGraceMinutes": 30,
+  "reacquireWithinMinutesOfStart": 1,
   "absentObservationsBeforeComplete": 2,
   "maxCallTabMinutes": 180,
   "stateRecordTtlDays": 7,

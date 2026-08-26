@@ -7,7 +7,7 @@ const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
-const { shouldSkipAsLate } = require('./dispatchRules');
+const { shouldSkipAsLate, shouldReacquireNow } = require('./dispatchRules');
 const { strategyForAttempt } = require('./retryStrategy');
 const { ensurePlaying } = require('./playback');
 const { Mutex, withDeadline, runPreparedBatch } = require('./concurrency');
@@ -741,15 +741,41 @@ async function main() {
           continue;
         }
         if (record.status === 'started') {
-          // It was recording and now is not. Two very different causes, and the difference
+          // It was recording and now is not. Three very different causes, and the difference
           // decides whether re-recording is correct:
+          //   - BEFORE the scheduled start -> the extension stopped the stream on silence,
+          //     because nobody is speaking yet. Nothing is wrong and nothing is being missed.
           //   - soon after the scheduled start -> the call is probably still on and the stream
           //     was stopped by hand or died, so reacquiring it is right
           //   - well past the start -> the call is simply over (the extension also auto-stops
           //     after 10 min of silence), so this is terminal
-          // Without the second case a finished call was re-recorded every poll for the rest of
-          // the retry window, duplicating transcripts and leaking a tab per attempt.
-          if (minsLeft > -reacquireGraceMinutes) {
+          // Without the last case a finished call was re-recorded every poll for the rest of
+          // the retry window, duplicating transcripts and leaking a tab per attempt. Without
+          // the first, a call joined at T-15 spent every one of its attempts on pre-call
+          // silence and was given up on before it began - which is what cost NVDA, CRWD and P.
+          // shouldReacquireNow() holds all three, and is unit-tested.
+          const verdict = shouldReacquireNow({
+            minsLeft,
+            reacquireGraceMinutes,
+            startsWithinMinutes: Number(config.reacquireWithinMinutesOfStart ?? 1),
+          });
+
+          // Waiting is not idling: the call has not begun, so there is nothing to miss, and
+          // restarting into the same silence would only spend an attempt that is needed once
+          // the call is actually under way.
+          if (verdict.waiting) {
+            const warnKey = `presilence|${key}`;
+            if (!warnedUnparseable.has(warnKey)) {
+              warnedUnparseable.add(warnKey);
+              logger.info(
+                `${row.symbol} ${row.fiscalPeriod}: recording stopped, but ${verdict.reason}. ` +
+                  'Will restart it when the call begins.'
+              );
+            }
+            continue;
+          }
+
+          if (verdict.reacquire) {
             // Deliberately NOT removing the record: claim() derives the next attempt number
             // from the existing one, so removing first would pin attempts at 1 and make the
             // cap below unreachable - the same defect that let the retry path run ~200 times.

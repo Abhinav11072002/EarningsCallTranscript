@@ -27,6 +27,7 @@ const SPEC = {
   shortcutTimeoutMs: { type: 'int', min: 1000, max: 120000 },
   lateStartGraceMinutes: { type: 'number', min: 0, max: 120 },
   reacquireGraceMinutes: { type: 'number', min: 0, max: 600 },
+  reacquireWithinMinutesOfStart: { type: 'number', min: 0, max: 60 },
   absentObservationsBeforeComplete: { type: 'int', min: 1, max: 20 },
   maxCallTabMinutes: { type: 'int', min: 1, max: 1440 },
   stateRecordTtlDays: { type: 'int', min: 1, max: 365 },

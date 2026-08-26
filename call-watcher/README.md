@@ -114,6 +114,15 @@ case looked like the first, so a completed call was re-recorded on every poll fo
 reacquired only within `reacquireGraceMinutes` of the scheduled start; past that the call is
 marked `completed`, which is terminal.
 
+**Pre-call silence no longer eats the retry budget.** The flow joins early, starts the
+recording and moves on, so most captures begin before anyone speaks - and the extension stops
+a stream after about ten minutes of silence. A call joined at T-15 therefore lost its stream
+around T-5 with nothing actually wrong, which the poll loop read as a dead capture and
+reacquired: new tab, old tab closed, one attempt spent. Repeat, and all four attempts were gone
+before the call began. Now a stopped stream more than `reacquireWithinMinutesOfStart` before
+the scheduled start is simply waited out - there is no audio yet to miss - and reacquiring
+resumes the moment the call is under way.
+
 **Unbounded growth is bounded.** Dedupe records are pruned past `stateRecordTtlDays`; the
 unparseable-row warning set is cleared if it grows large (it is keyed partly on the live
 countdown text, so a row whose text ticks would otherwise add an entry every poll); logs are
@@ -469,6 +478,10 @@ stop: crash, wedged poll, lost Chrome, or expired portal session.
 - `reacquireGraceMinutes` — how long after the scheduled start a vanished stream is treated as
   "stopped by accident, reacquire it" rather than "the call ended" (30). Past this the call is
   marked `completed`, which is terminal - see "Running indefinitely".
+- `reacquireWithinMinutesOfStart` — how close to the scheduled start a vanished stream begins to
+  count as a real failure (1). Earlier than this it is pre-call silence and is waited out rather
+  than restarted. Raise it for a provider that opens its line early and has audio playing before
+  the scheduled time.
 - `maxCallTabMinutes` — backstop age at which a call tab is closed even if completion was
   never observed (180).
 - `stateRecordTtlDays` — how long dedupe records are kept (7). They can never be replayed once

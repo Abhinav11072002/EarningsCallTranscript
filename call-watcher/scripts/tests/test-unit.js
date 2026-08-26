@@ -14,7 +14,7 @@ const path = require('path');
 
 const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('../../src/tableWatcher');
 const { StateStore } = require('../../src/stateStore');
-const { shouldSkipAsLate } = require('../../src/dispatchRules');
+const { shouldSkipAsLate, shouldReacquireNow } = require('../../src/dispatchRules');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow, buildShortcutCommand } = require('../../src/extensionTrigger');
@@ -1694,6 +1694,39 @@ check('formFiller: field names separated by hyphens or underscores still match',
     const got = matchField(description);
     assert.ok(got !== 'firstName' && got !== 'lastName' && got !== 'fullName', `${description} is not a person: got ${got}`);
   }
+});
+
+check('dispatchRules: a stream lost BEFORE the call starts is waited out, not restarted', () => {
+  // The flow is join early, start recording, move on - so most captures begin before anyone
+  // speaks. The extension stops a stream after about ten minutes of silence, so a call joined
+  // at T-15 loses its stream around T-5 with nothing wrong. Restarting there spends an attempt
+  // and lands in the same silence; four of those and the attempts are gone before the call has
+  // even begun. That is what cost NVDA, CRWD and P their recordings.
+  for (const minsLeft of [14, 10, 5, 2]) {
+    const v = shouldReacquireNow({ minsLeft });
+    assert.strictEqual(v.reacquire, false, `${minsLeft} min before the start must not restart`);
+    assert.strictEqual(v.waiting, true, 'and it must say it is waiting, not that it gave up');
+  }
+});
+
+check('dispatchRules: once the call is under way a lost stream is restarted at once', () => {
+  // Here a missing stream means what it always meant, and every second of delay is lost audio.
+  for (const minsLeft of [1, 0, -1, -10, -29]) {
+    assert.strictEqual(shouldReacquireNow({ minsLeft }).reacquire, true, `${minsLeft} should restart`);
+  }
+});
+
+check('dispatchRules: well past the start it is over, not worth restarting', () => {
+  const v = shouldReacquireNow({ minsLeft: -31, reacquireGraceMinutes: 30 });
+  assert.strictEqual(v.reacquire, false);
+  assert.ok(!v.waiting, 'over is terminal, not waiting');
+  assert.match(v.reason, /over/);
+});
+
+check('dispatchRules: the start threshold is configurable without changing the shape', () => {
+  // A provider that opens its line five minutes early could reasonably restart sooner.
+  assert.strictEqual(shouldReacquireNow({ minsLeft: 4, startsWithinMinutes: 5 }).reacquire, true);
+  assert.strictEqual(shouldReacquireNow({ minsLeft: 6, startsWithinMinutes: 5 }).reacquire, false);
 });
 
 // ---------------------------------------------------------------- report
