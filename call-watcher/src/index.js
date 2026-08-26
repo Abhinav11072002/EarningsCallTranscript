@@ -8,6 +8,7 @@ const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
 const { shouldSkipAsLate } = require('./dispatchRules');
+const { strategyForAttempt } = require('./retryStrategy');
 const { Mutex, withDeadline, runPreparedBatch } = require('./concurrency');
 const { triggerExtension, getActiveStreams, streamMatchesRow, splitFiscalPeriod } = require('./extensionTrigger');
 const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
@@ -122,7 +123,10 @@ function withPipelineLock(fn) {
 // every preparation in the batch has finished. Both facts were established the hard way here:
 // an unrelated context.newPage() was verified to kill an open popup, and a capture started
 // while the wrong tab held focus records the wrong tab.
-async function prepareCall(context, portalPage, row, key, logger) {
+async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
+  // Widens the search on each retry rather than repeating the same one. A day's log showed
+  // every failed call burning all four attempts on the identical error.
+  const strategy = strategyForAttempt(attempt);
   const startedAt = Date.now();
   let page = null;
   // Declared here on purpose. This used to live outside the try in the old single-function
@@ -171,6 +175,7 @@ async function prepareCall(context, portalPage, row, key, logger) {
           symbol: row.symbol,
           year,
           period,
+          strategy,
         });
         // Some providers gate the call on a choice of client rather than a form (Zoom's lobby
         // offers only "Join from Zoom Workplace app" and "Join from browser"). That has to be
@@ -182,9 +187,15 @@ async function prepareCall(context, portalPage, row, key, logger) {
         // The callback keeps `page` current even if the form filler throws mid-way: it can
         // follow the call into a new tab and close the old one, and the catch below must clean
         // up the tab we actually hold, not the one we started with.
-        const registration = await fillRegistrationForm(page, config.dummyIdentity, logger, (adopted) => {
-          page = adopted;
-        });
+        const registration = await fillRegistrationForm(
+          page,
+          config.dummyIdentity,
+          logger,
+          (adopted) => {
+            page = adopted;
+          },
+          strategy
+        );
         if (registration.page) page = registration.page;
         // ...and again afterwards: a registration step can hand back a second client choice, and
         // Zoom's web client re-renders into the meeting only once the name form is submitted.
@@ -298,7 +309,9 @@ function runBatch(context, portalPage, batch, store, logger, obs, callTabs) {
 
     await runPreparedBatch(batch, {
       width,
-      prepare: ({ row, key }) => prepareCall(context, portalPage, row, key, logger),
+      // The attempt number comes from the dedupe store, which claim() has already advanced -
+      // so a third attempt genuinely searches like a third attempt.
+      prepare: ({ row, key }) => prepareCall(context, portalPage, row, key, logger, store.get(key)?.attempts || 1),
       // prepareCall reports its own failures in-band rather than throwing, so that a bad call
       // cannot abort the batch; unwrap that here so both shapes reach recordFailure.
       trigger: (outcome, { row, key, minsLeft }) => {

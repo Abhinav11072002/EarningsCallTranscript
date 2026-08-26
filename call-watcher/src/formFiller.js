@@ -717,7 +717,14 @@ async function findRegistrationError(page) {
 //    already logged into a Q4 account - clicking "Register with a Q4 Account" then "Register
 //    for event" is enough, sometimes across more than one screen, no typing needed).
 // Logs everything it does so unrecognized/unhandled pages are visible rather than silent.
-async function fillRegistrationForm(page, identity, logger, onPageChanged) {
+async function fillRegistrationForm(page, identity, logger, onPageChanged, strategy) {
+  // Later attempts are more patient and less fussy - see retryStrategy.js. A first attempt
+  // uses exactly the values that were hardcoded here before.
+  const maxSteps = (strategy && strategy.maxFormSteps) || 4;
+  const alwaysAllowFurniture = Boolean(strategy && strategy.allowFurniture);
+  if (strategy && strategy.attempt > 1) {
+    logger.info(`Filling with a wider search (attempt ${strategy.attempt}: ${strategy.label}).`);
+  }
   // Registration forms/buttons often render in client-side after domcontentloaded, so an
   // immediate query can race the page and find nothing even when a gate exists.
   await waitForRegistrationSurface(page);
@@ -731,7 +738,7 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged) {
   // worded buttons are deliberately NOT remembered - if a "Register" button is still there, a
   // real form gate probably is too, and that must stay a loud failure.
   const clearedEntryButtons = new Set();
-  for (let step = 0; step < 4; step++) {
+  for (let step = 0; step < maxSteps; step++) {
     let acted = false;
     for (const frame of registrationFrames(page)) {
       const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
@@ -742,7 +749,14 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged) {
       // chrome. Once we have acted, a remaining chrome-only field is page furniture (a footer
       // newsletter) that happens to look identity-shaped - filling it subscribes the dummy
       // identity and widens the set of buttons the click step will then accept.
-      let filledCount = await fillVisibleFields(frame, identity, logger, step === 0 && !lastAction);
+      // The furniture fallback is normally reserved for a first pass, where a gate genuinely
+      // living in a footer is plausible. Once precision has failed it is worth trying anyway.
+      let filledCount = await fillVisibleFields(
+        frame,
+        identity,
+        logger,
+        alwaysAllowFurniture || (step === 0 && !lastAction)
+      );
       // Only once the identity fields are in: an unmatched dropdown is answered as a last
       // resort, never in preference to a field we actually understand.
       filledCount += await fillUnmatchedSelects(frame, identity, logger);

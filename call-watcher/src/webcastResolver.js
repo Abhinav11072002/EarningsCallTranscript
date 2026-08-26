@@ -10,6 +10,24 @@ const DIRECT_LINK_TEXT_PATTERN =
 // hop and burned it on an unrelated page - after which resolution gives up entirely.
 const NAV_LINK_PATTERN = /investor relations|\bevents?\s*(?:&|and)\s*presentations?|\bwebcasts?\b|earnings\s*(?:call|webcast|release)|news\s*(?:&|and)\s*events?/i;
 const MAX_HOPS = 2; // the initial landing page, plus at most one navigational hop deeper
+
+// Every widenable limit now comes from the retry strategy, defaulting to the values that were
+// module constants - so a first attempt behaves exactly as it did before this existed. See
+// retryStrategy.js for why breadth is something to reach for only after precision has failed.
+const { BASE } = require('./retryStrategy');
+
+function limitsFrom(hints) {
+  const s = (hints && hints.strategy) || BASE;
+  return {
+    maxHops: s.maxHops || MAX_HOPS,
+    ctaTextLimit: s.ctaTextLimit || MAX_CTA_TEXT_LENGTH,
+    navPattern: s.navPattern || NAV_LINK_PATTERN,
+    ctaPattern: s.ctaPattern || DIRECT_LINK_TEXT_PATTERN,
+    hrefPattern: s.hrefPattern || null,
+    attempt: s.attempt || 1,
+    label: s.label || 'precise',
+  };
+}
 // Legitimate call-to-action links ("Webcast", "Listen to the Webcast") are short. Long text
 // merely containing a matching keyword is almost always a footer/branding line, e.g. "Webcasting
 // Platform Powered by ACCESS Newswire Inc. (c) Copyright 2026 All Rights Reserved." - which
@@ -87,6 +105,7 @@ function scoreCandidate(text, url, hints) {
 // page's own wording varies wildly - so checking link DESTINATIONS by domain is more reliable
 // than guessing every possible English phrasing. Runs before the text-based fallback below.
 async function findKnownProviderLink(page, config, hints) {
+  const { hrefPattern } = limitsFrom(hints);
   const anchors = await page.$$('a[href]');
   const candidates = [];
   for (const [index, a] of anchors.entries()) {
@@ -98,11 +117,19 @@ async function findKnownProviderLink(page, config, hints) {
     } catch {
       continue; // one malformed href must not abort the whole scan
     }
-    if (!hostnameMatches(absolute, config.knownDirectProviderDomains)) continue;
+    // A known provider domain is the strongest signal, but later attempts also accept a link
+    // whose PATH says webcast even on an unknown host. Some providers label the real link with
+    // nothing useful - "Click here", an icon, a bare date - while the href says /webcast/ or
+    // /event/ outright, and text-only matching can never find those.
+    const knownHost = hostnameMatches(absolute, config.knownDirectProviderDomains);
+    const shapeMatches = Boolean(hrefPattern && hrefPattern.test(new URL(absolute).pathname));
+    if (!knownHost && !shapeMatches) continue;
     if (isAssetUrl(absolute)) continue;
     if (isNonWebcastPath(absolute)) continue;
     const text = ((await a.innerText().catch(() => '')) || '').trim();
-    candidates.push({ absolute, index, score: scoreCandidate(text, absolute, hints) });
+    // A known host outranks a lucky-looking path, so precision still wins where both apply.
+    const bonus = knownHost ? 2 : 0;
+    candidates.push({ absolute, index, score: scoreCandidate(text, absolute, hints) + bonus });
   }
   if (!candidates.length) return null;
   // Highest score wins; DOM order breaks ties so single-candidate pages are unchanged.
@@ -126,11 +153,12 @@ async function findEmbeddedProviderFrame(page, config) {
 // Looks for an obvious navigational link (Investor Relations / Events / Webcasts / Earnings
 // Call) on a page that had no direct answer - in case the real webcast link is one click
 // deeper than wherever the admin portal's dial-in link happens to land.
-async function findNavigationalLink(page) {
+async function findNavigationalLink(page, hints) {
+  const { ctaTextLimit, navPattern } = limitsFrom(hints);
   const anchors = await page.$$('a[href]');
   for (const a of anchors) {
     const text = ((await a.innerText().catch(() => '')) || '').trim();
-    if (text.length > MAX_CTA_TEXT_LENGTH || !NAV_LINK_PATTERN.test(text)) continue;
+    if (text.length > ctaTextLimit || !navPattern.test(text)) continue;
     const href = await a.getAttribute('href').catch(() => null);
     if (!href) continue;
     return new URL(href, page.url()).toString();
@@ -161,10 +189,11 @@ async function tryResolveOnCurrentPage(page, config, logger, hints) {
     return true;
   }
 
+  const { ctaTextLimit, ctaPattern } = limitsFrom(hints);
   const candidates = await page.$$('a:visible, button:visible');
   for (const el of candidates) {
     const text = ((await el.innerText().catch(() => '')) || '').trim();
-    if (text.length > MAX_CTA_TEXT_LENGTH || !DIRECT_LINK_TEXT_PATTERN.test(text)) continue;
+    if (text.length > ctaTextLimit || !ctaPattern.test(text)) continue;
 
     logger.info(`Found candidate webcast link via text match: "${text}"`);
     const href = await el.getAttribute('href').catch(() => null);
@@ -208,18 +237,20 @@ async function tryResolveOnCurrentPage(page, config, logger, hints) {
 // link) and re-checks there, in case the real link is one click deeper - capped at MAX_HOPS so
 // a page with no real webcast link at all can't send this wandering indefinitely.
 async function resolveWebcastPage(context, dialinUrl, config, logger, hints) {
+  const { maxHops, attempt, label } = limitsFrom(hints);
+  if (attempt > 1) logger.info(`Resolving with a wider search (attempt ${attempt}: ${label}).`);
   const page = await context.newPage();
   await page.goto(dialinUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   // Provider shells often render the registration form or iframe after the initial document
   // event. Give their client-side bootstrap a short window before classifying the page.
   await page.waitForTimeout(1000);
 
-  for (let hop = 0; hop < MAX_HOPS; hop++) {
+  for (let hop = 0; hop < maxHops; hop++) {
     const resolved = await tryResolveOnCurrentPage(page, config, logger, hints);
     if (resolved) return page;
 
-    if (hop < MAX_HOPS - 1) {
-      const navLink = await findNavigationalLink(page).catch(() => null);
+    if (hop < maxHops - 1) {
+      const navLink = await findNavigationalLink(page, hints).catch(() => null);
       if (navLink) {
         logger.info(`No direct webcast link here; following navigational link: ${navLink}`);
         const navigated = await page

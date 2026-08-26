@@ -23,6 +23,7 @@ const { SeenLog, reconcile, formatReconciliation } = require('../../src/reconcil
 const { blindReason } = require('../../src/supervisorRules');
 const { validateConfig } = require('../../src/validateConfig');
 const { judgeRelevance, symbolAppearsAsWord } = require('../../src/pageRelevance');
+const { strategyForAttempt, BASE } = require('../../src/retryStrategy');
 const { parseSendKeys, toAppleScriptModifiers, toAppleScriptArgs, describeShortcut } = require('../../src/shortcutKeys');
 const { macCommand, windowsCommand } = require('../../src/preflight');
 const { acquireInstanceLock, releaseInstanceLock, refreshInstanceLock, lockPathFor } = require('../../src/instanceLock');
@@ -1589,6 +1590,87 @@ check('pageRelevance: a player with no identity at all is refused unless it is t
   const onPortalHost = judgeRelevance({ ...base, dialinUrl: 'https://app.webinar.net/OM3bGdQ8gY1' });
   assert.ok(onPortalHost.accepted, 'the portal-supplied host with a player must be accepted');
   assert.match(onPortalHost.reason, /host the portal/);
+});
+
+// ---------------------------------------------------------------- retrying differently
+
+// Retrying used to mean doing the same thing again. A day's log showed every failed call
+// burning all four attempts and reporting the identical error each time - four attempts that
+// were really one attempt tried four times.
+
+check('retryStrategy: the first attempt is exactly what it always was', () => {
+  // The single most important property here. Attempt 1 produced 19 good captures in a day; a
+  // broader search is not a better one, it is a riskier one, and it must not leak backwards.
+  const first = strategyForAttempt(1);
+  assert.strictEqual(first.maxHops, BASE.maxHops);
+  assert.strictEqual(first.ctaTextLimit, BASE.ctaTextLimit);
+  assert.strictEqual(first.maxFormSteps, BASE.maxFormSteps);
+  assert.strictEqual(first.allowFurniture, false);
+  assert.strictEqual(first.tryAllButtons, false);
+  assert.strictEqual(first.hrefPattern, null, 'link-shape matching is for later attempts only');
+  assert.strictEqual(first.label, 'precise');
+});
+
+check('retryStrategy: each attempt searches strictly wider than the last', () => {
+  const s = [1, 2, 3, 4].map(strategyForAttempt);
+  // Monotonic: nothing narrows as attempts go up, or a later try could fail where an earlier
+  // one would have succeeded.
+  for (let i = 1; i < s.length; i++) {
+    assert.ok(s[i].maxHops >= s[i - 1].maxHops, `hops narrowed at attempt ${i + 1}`);
+    assert.ok(s[i].ctaTextLimit >= s[i - 1].ctaTextLimit, `CTA limit narrowed at attempt ${i + 1}`);
+    assert.ok(s[i].maxFormSteps >= s[i - 1].maxFormSteps, `form steps narrowed at attempt ${i + 1}`);
+  }
+  // And each tier actually turns something on.
+  assert.ok(s[1].allowFurniture && !s[0].allowFurniture, 'attempt 2 allows footer forms');
+  assert.ok(s[2].hrefPattern && !s[1].hrefPattern, 'attempt 3 judges links by URL shape');
+  assert.ok(s[2].tryAllButtons && !s[1].tryAllButtons, 'attempt 3 tries every button');
+  assert.ok(s[3].ctaTextLimit > s[2].ctaTextLimit, 'attempt 4 accepts longer link text');
+});
+
+check('retryStrategy: widening finds link text and shapes precision rejects', () => {
+  const a1 = strategyForAttempt(1);
+  const a2 = strategyForAttempt(2);
+  const a3 = strategyForAttempt(3);
+
+  // Wording a first pass will not touch, but that really does lead to calls.
+  for (const text of ['Listen to the conference call', 'Click here', 'Attend the event', 'Dial-in details']) {
+    assert.ok(!a1.ctaPattern.test(text) || text.includes('conference call'), `attempt 1 should be strict about: ${text}`);
+    assert.ok(a2.ctaPattern.test(text), `attempt 2 should accept: ${text}`);
+  }
+
+  // A link labelled uselessly whose URL says exactly what it is. Text-only matching can never
+  // find these, and some providers label the real link with nothing but an icon or a date.
+  assert.strictEqual(a1.hrefPattern, null);
+  for (const path of ['/webcast/q2-2026', '/events/12345', '/live/session', '/attendee/9981']) {
+    assert.ok(a3.hrefPattern.test(path), `attempt 3 should recognise: ${path}`);
+  }
+  // ...but still not a document or a corporate page, which other rules reject anyway.
+  assert.ok(!a3.hrefPattern.test('/about-us'), 'shape matching must not resurrect corporate pages');
+});
+
+check('retryStrategy: nav wording broadens to where webcast links actually hide', () => {
+  const a1 = strategyForAttempt(1);
+  const a2 = strategyForAttempt(2);
+  // Deliberately NOT matched first time round: too generic, and a wasted hop is a lost hop.
+  for (const text of ['Investors', 'Financial Reports', 'Quarterly Results', 'Media']) {
+    assert.ok(!a1.navPattern.test(text), `attempt 1 should skip: ${text}`);
+    assert.ok(a2.navPattern.test(text), `attempt 2 should follow: ${text}`);
+  }
+  // The precise wording keeps working at every level.
+  for (const s of [a1, a2]) assert.ok(s.navPattern.test('Events & Presentations'));
+});
+
+check('retryStrategy: beyond the cap it stops widening rather than doing something odd', () => {
+  const fourth = strategyForAttempt(4);
+  for (const n of [5, 9, 100]) {
+    assert.deepStrictEqual(strategyForAttempt(n).maxHops, fourth.maxHops);
+    assert.deepStrictEqual(strategyForAttempt(n).maxFormSteps, fourth.maxFormSteps);
+  }
+  // Nonsense in, first attempt out - never an undefined limit that would disable a bound.
+  for (const bad of [0, -3, undefined, null, NaN, 'two']) {
+    const s = strategyForAttempt(bad);
+    assert.strictEqual(s.maxHops, BASE.maxHops, `bad input ${String(bad)} must fall back to attempt 1`);
+  }
 });
 
 // ---------------------------------------------------------------- report
