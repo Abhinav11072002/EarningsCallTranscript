@@ -308,6 +308,7 @@ rule covers the lock; use `npm run report` for the summary.
 npm run supervise        # like npm start, but restarts on death OR on a blind heartbeat
 npm run stop             # stop the running watcher, whatever it was launched as
 npm run report           # "did we get everything today?" - safe to run while it is watching
+npm run analyze -- --all # what keeps going wrong, ranked by how many calls it costs
 npm test                 # everything: unit, then the four browser suites
 npm run test:unit        # pure logic - no browser needed, ~1s
 npm run test:registration

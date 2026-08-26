@@ -12,6 +12,7 @@
     "supervise": "node scripts/supervisor.js",
     "stop": "node scripts/stop.js",
     "report": "node scripts/report.js",
+    "analyze": "node scripts/analyze.js",
     "test": "node scripts/tests/test-unit.js && node scripts/tests/test-form-filler.js && node scripts/tests/test-webcast-resolver.js && node scripts/tests/test-join-flow.js && node scripts/tests/test-gauntlet.js",
     "test:unit": "node scripts/tests/test-unit.js",
     "test:registration": "node scripts/tests/test-form-filler.js",

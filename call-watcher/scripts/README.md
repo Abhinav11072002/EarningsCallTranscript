@@ -11,6 +11,7 @@ them.
 | `npm run supervise` | `supervisor.js` | Runs the watcher and restarts it if it exits or goes blind. Use this instead of `npm start` for an unattended day. |
 | `npm run stop` | `stop.js` | Stops the running watcher, whatever it was launched as. Reads `data/watcher.lock`, which the watcher writes itself. |
 | `npm run report` | `report.js` | "Did we get everything today?" Safe to run in a second terminal while the watcher works. |
+| `npm run analyze` | `analyze.js` | "What keeps going wrong, and which fix buys the most calls back?" Ranks causes and platforms across any number of days. |
 
 ## scripts/tests/ — the automated suite
 
