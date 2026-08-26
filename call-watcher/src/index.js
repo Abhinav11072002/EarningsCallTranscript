@@ -9,6 +9,7 @@ const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
 const { shouldSkipAsLate } = require('./dispatchRules');
 const { strategyForAttempt } = require('./retryStrategy');
+const { ensurePlaying } = require('./playback');
 const { Mutex, withDeadline, runPreparedBatch } = require('./concurrency');
 const { triggerExtension, getActiveStreams, streamMatchesRow, splitFiscalPeriod } = require('./extensionTrigger');
 const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
@@ -136,6 +137,7 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
   // resolved URL and the ledger would attribute the wrong page to a call. Harmless while the
   // pipeline was strictly serial; a data-corruption bug the moment it stopped being.
   let resolvedUrl = null;
+  let playback = null;
   try {
     const prepared = await withDeadline(
       (async () => {
@@ -200,6 +202,18 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
         // ...and again afterwards: a registration step can hand back a second client choice, and
         // Zoom's web client re-renders into the meeting only once the name form is submitted.
         page = await advanceJoinFlow(page, logger);
+        // Press play if the player is waiting to be started. Joining a call and hearing it are
+        // not the same thing, and a silent tab is stopped by the extension after ten minutes -
+        // which the poll loop then reads as the stream having died, and reacquires, and starts
+        // the whole cycle again.
+        playback = await ensurePlaying(page, logger);
+        if (!playback.playing) {
+          logger.warn(
+            `Recording ${row.symbol} ${row.fiscalPeriod} with no audio yet (${playback.action}). ` +
+              'If the call has not started this is normal; if it persists the capture will be silent.'
+          );
+        }
+
         // Read LAST, not before the form step. resolvedUrl is the field the ledger uses to
         // answer "was this the right page?", and registration can navigate - or follow the call
         // into an entirely different tab - after the earlier reading was taken. Recording the
@@ -209,7 +223,7 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
           const detail = registration.error ? `: ${registration.error}` : '';
           throw new Error(`Registration gate still appears active after filling and submission attempts${detail}`);
         }
-        return { page, dialinLink, resolvedUrl };
+        return { page, dialinLink, resolvedUrl, playback };
       })(),
       PREPARE_DEADLINE_MS,
       `Preparation exceeded the ${PREPARE_DEADLINE_MS / 1000}s limit`
@@ -263,6 +277,9 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
       resolvedUrl: prepared.resolvedUrl,
       pageTitle,
       durationSec: Number(((Date.now() - startedAt) / 1000).toFixed(1)),
+      // Whether audio was actually running when the capture began. A started-but-silent call
+      // is the one shape that looks identical to success in every other field.
+      audioPlaying: prepared.playback ? prepared.playback.playing : null,
       // Negative minsLeft means the call had already begun when we dispatched it.
       secondsLateVsScheduled: minsLeftAtDispatch === undefined ? null : Math.round(-minsLeftAtDispatch * 60),
       attempts: store.get(key)?.attempts ?? null,
