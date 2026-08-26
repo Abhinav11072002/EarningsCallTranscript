@@ -3,6 +3,11 @@
 Setting up one machine so it records calls on its own, survives a reboot, and does not need
 anybody logged in watching it.
 
+**Setting up a machine from scratch?** Start with [SETUP.md](SETUP.md) - the full sequence from
+a bare Mac to a running watcher, including installing Node, Chrome and the extension. This file
+covers only the unattended-operation half of it, and SETUP.md links back here at the right
+point.
+
 Do this **after** `node scripts/diagnostics/diag-popup-reliability.js 5` reports 5/5 by hand.
 Everything here is about keeping that working without supervision — it will not fix a machine
 where the basics do not yet work.
