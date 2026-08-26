@@ -21,6 +21,7 @@ const { splitFiscalPeriod, streamMatchesRow, buildShortcutCommand } = require('.
 const { createObservability } = require('../../src/observability');
 const { SeenLog, reconcile, formatReconciliation } = require('../../src/reconciliation');
 const { blindReason } = require('../../src/supervisorRules');
+const { matchField } = require('../../src/formFiller');
 const { validateConfig } = require('../../src/validateConfig');
 const { judgeRelevance, symbolAppearsAsWord } = require('../../src/pageRelevance');
 const { strategyForAttempt, BASE } = require('../../src/retryStrategy');
@@ -1670,6 +1671,28 @@ check('retryStrategy: beyond the cap it stops widening rather than doing somethi
   for (const bad of [0, -3, undefined, null, NaN, 'two']) {
     const s = strategyForAttempt(bad);
     assert.strictEqual(s.maxHops, BASE.maxHops, `bad input ${String(bad)} must fall back to attempt 1`);
+  }
+});
+
+check('formFiller: field names separated by hyphens or underscores still match', () => {
+  // q4inc's registration form uses analyst-first-name, analyst-last-name, analyst-company-name.
+  // The patterns required whitespace between the words, so "last-name" matched nothing at all -
+  // the field fell through to a geometric label guess, picked up its NEIGHBOUR's "First name"
+  // because both sat on the same row, and the last-name box was filled with the first name.
+  const expected = [
+    ['analyst-first-name', 'firstName'], ['analyst-last-name', 'lastName'],
+    ['analyst-company-name', 'company'], ['analyst-email', 'email'],
+    ['analyst-phone-number', 'phone'],
+    ['first_name', 'firstName'], ['last_name', 'lastName'],
+    ['given-name', 'firstName'], ['family_name', 'lastName'], ['surname', 'lastName'],
+  ];
+  for (const [description, key] of expected) {
+    assert.strictEqual(matchField(description), key, `${description} should match ${key}`);
+  }
+  // The separators must not widen what counts as a person's name.
+  for (const description of ['file-name', 'user_name', 'screen-name', 'host-name']) {
+    const got = matchField(description);
+    assert.ok(got !== 'firstName' && got !== 'lastName' && got !== 'fullName', `${description} is not a person: got ${got}`);
   }
 });
 

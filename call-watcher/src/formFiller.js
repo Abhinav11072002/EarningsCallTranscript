@@ -1,8 +1,13 @@
 const { NATIVE_APP_PATTERN } = require('./joinFlow');
 
+// The separator is [\s_-]* everywhere, not \s*. Real ids are hyphenated or underscored -
+// q4inc's registration form uses analyst-first-name, analyst-last-name, analyst-company-name -
+// and "last\s*name" cannot match "last-name". On that form the id matched nothing, the field
+// fell through to the geometric label guess, and the LAST NAME box was filled with the first
+// name while the last name was never used at all.
 const FIELD_PATTERNS = [
-  { key: 'firstName', regex: /first\s*name|fname|given\s*name/i },
-  { key: 'lastName', regex: /last\s*name|lname|surname|family\s*name/i },
+  { key: 'firstName', regex: /first[\s_-]*name|fname|given[\s_-]*name/i },
+  { key: 'lastName', regex: /last[\s_-]*name|lname|surname|family[\s_-]*name/i },
   // The trailing boundary is (?![A-Za-z]) rather than (?:\s|$) because real labels carry
   // punctuation: "Name*:" is what ELMD's form actually says, and requiring whitespace or
   // end-of-string after "name" meant it never matched. The field was then claimed by the
@@ -12,7 +17,7 @@ const FIELD_PATTERNS = [
   { key: 'fullName', regex: /(?:^|\s)(?:full[\s_-]*name|your[\s_-]*name|name)(?![A-Za-z])/i },
   { key: 'email', regex: /e-?mail/i },
   { key: 'phone', regex: /phone|mobile|tel(ephone)?/i },
-  { key: 'company', regex: /company|organi[sz]ation|institution|firm/i },
+  { key: 'company', regex: /company|organi[sz]ation|institution|firm/i },  // 'company-name' matches on 'company' alone
   { key: 'country', regex: /country/i },
 ];
 
@@ -53,12 +58,21 @@ async function describeField(el) {
         return r.width > 0 && r.height > 0;
       });
 
+      // Distance, not just height. First name and Last name sit side by side on the same row,
+      // so both labels are the SAME vertical distance from both fields - and judging by height
+      // alone, whichever came first in the DOM won for both. That is how a Last name box came
+      // to be filled with a first name.
+      //
+      // Horizontal alignment breaks the tie: a label belongs to the field beneath it, not to
+      // its neighbour two hundred pixels away. Vertical distance still dominates, so a label
+      // genuinely above a field is never beaten by one merely closer sideways.
       const gapTo = (target, labelRect) => {
         const r = target.getBoundingClientRect();
         const verticalGap = r.top - labelRect.bottom;
         const horizontalOverlap = Math.min(r.right, labelRect.right) - Math.max(r.left, labelRect.left);
         if (verticalGap < -5 || verticalGap > 60 || horizontalOverlap <= -50) return Infinity;
-        return verticalGap;
+        const horizontalOffset = Math.abs(labelRect.left - r.left);
+        return verticalGap * 100 + Math.min(horizontalOffset, 99);
       };
 
       let best = null;
@@ -812,4 +826,27 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
   return { foundAny, pending, error: pending ? error : null, page };
 }
 
-module.exports = { fillRegistrationForm, matchField };
+// Diagnostic only: what the filler SEES on a page, without touching it. Reading a form the way
+// the matcher reads it is the fastest way to find out why a real registration failed - guessing
+// from an error message costs far more. Used by scripts/diagnostics/diag-form-fields.js.
+async function inspectFields(page) {
+  const rows = [];
+  for (const frame of page.frames()) {
+    const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
+    for (const el of fields) {
+      const type = ((await el.getAttribute('type')) || 'text').toLowerCase();
+      if (['hidden', 'submit', 'button'].includes(type)) continue;
+      const description = await describeField(el);
+      rows.push({
+        type,
+        description: (description || '').replace(/\s+/g, ' ').trim(),
+        matchedKey: matchField(description) || null,
+        required: await el.evaluate((n) => n.required || n.getAttribute('aria-required') === 'true').catch(() => false),
+        value: (await el.inputValue().catch(() => '')) || '',
+      });
+    }
+  }
+  return rows;
+}
+
+module.exports = { fillRegistrationForm, matchField, inspectFields };

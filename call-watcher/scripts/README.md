@@ -39,6 +39,7 @@ says which question in its own header.
 | `diag-click-resolver.js` | What URL does the portal actually open for this symbol? | yes |
 | `diag-popup-reliability.js` | Does the popup open and fill *every* time, or only usually? | yes — stops before Start |
 | `diag-extension-trigger.js` | Is the trigger path working, and how fast? | **no — starts a real transcription** |
+| `diag-form-fields.js` | What does the form filler see, and what would it type where? | yes |
 
 ## What is deliberately NOT here
 
