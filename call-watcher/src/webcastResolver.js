@@ -28,6 +28,25 @@ const ASSET_PATH_PATTERN = /\.(pdf|zip|xlsx?|docx?|pptx?|csv|jpe?g|png|gif|svg|m
 // separate from scoring below because these should be actively avoided, not merely ranked low.
 const STALE_LINK_PATTERN = /archive|replay|transcript|presentation|slides?\b|playback|on-?demand/i;
 
+// A provider's own site is full of links to itself, and only one of them is the webcast. ZH
+// 2026Q2 resolved to https://www.notified.com/privacy and failed all four attempts against a
+// privacy policy: notified.com is a known provider, so a footer link to it looked exactly like
+// the thing we were hunting for. Matching the DOMAIN was never enough - these paths are
+// corporate furniture on every provider site, and none of them is ever a call.
+const NON_WEBCAST_PATH_PATTERN =
+  /\/(privacy|terms|legal|cookie|gdpr|about|about-us|contact|contact-us|careers|jobs|support|help|faq|blog|resources|pricing|products|solutions|company|press|newsroom|sitemap|accessibility|imprint)(?:[-_/]|$|\?|#)/i;   // the terminator allows a hyphen, so "terms-of-use" is caught too
+
+function isNonWebcastPath(url) {
+  try {
+    const parsed = new URL(url);
+    // The provider's bare homepage is not the call either.
+    if (parsed.pathname === '/' || parsed.pathname === '') return true;
+    return NON_WEBCAST_PATH_PATTERN.test(parsed.pathname);
+  } catch {
+    return true;
+  }
+}
+
 function hostnameMatches(url, domains) {
   try {
     const hostname = new URL(url).hostname;
@@ -81,6 +100,7 @@ async function findKnownProviderLink(page, config, hints) {
     }
     if (!hostnameMatches(absolute, config.knownDirectProviderDomains)) continue;
     if (isAssetUrl(absolute)) continue;
+    if (isNonWebcastPath(absolute)) continue;
     const text = ((await a.innerText().catch(() => '')) || '').trim();
     candidates.push({ absolute, index, score: scoreCandidate(text, absolute, hints) });
   }
@@ -219,4 +239,4 @@ async function resolveWebcastPage(context, dialinUrl, config, logger, hints) {
   return page;
 }
 
-module.exports = { resolveWebcastPage };
+module.exports = { resolveWebcastPage, isNonWebcastPath };
