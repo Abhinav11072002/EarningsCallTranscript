@@ -168,7 +168,13 @@ for (const [label, attempts] of byCall) {
     recorded.push({ label, entry: started, attempts: attempts.length });
     // The dangerous shape: counted as success, produced nothing.
     if (started.audioPlaying === false) {
-      atRisk.push({ label, why: 'no audio was playing when the capture began', title: started.pageTitle });
+      atRisk.push({
+        label,
+        why: 'no audio was playing when the capture began',
+        title: started.pageTitle,
+        // Negative secondsLate means the call had not started yet, which explains silence.
+        early: typeof started.secondsLateVsScheduled === 'number' ? Math.round(-started.secondsLateVsScheduled / 60) : null,
+      });
     }
     continue;
   }
@@ -192,12 +198,15 @@ if (!atRisk.length) {
   console.log('  none - every capture had audio playing when it began');
 } else {
   for (const r of atRisk) {
-    console.log(`  ${r.label.padEnd(18)} ${r.why}`);
+    const early = r.early === null ? '' : r.early > 0 ? `  (joined ${r.early} min BEFORE the scheduled start)` : '  (joined after the start)';
+    console.log(`  ${r.label.padEnd(18)} ${r.why}${early}`);
     console.log(`  ${''.padEnd(18)} title: ${JSON.stringify(r.title || '')}`);
   }
   console.log('');
-  console.log('  These are the ones worth listening to by hand. A silent capture looks exactly');
-  console.log('  like a good one everywhere else, so nothing downstream will flag it.');
+  console.log('  A capture that began before the call did will legitimately be silent at first -');
+  console.log('  those are only a worry because the extension stops a stream after ten minutes of');
+  console.log('  silence, which the poll loop then reads as the call having died. One that began');
+  console.log('  AFTER the scheduled start and is still silent is the more serious shape.');
 }
 
 // ---------------------------------------------------------------- failures by cause
@@ -240,6 +249,12 @@ if (!rankedProviders.length) {
   const worst = rankedProviders[0][1];
   for (const [host, count] of rankedProviders) {
     console.log(`  ${String(count).padStart(3)}  ${bar(count, worst)}  ${host}`);
+    // The URL of one failing call on that platform, so the next step is a copy and paste rather
+    // than a hunt through the ledger. Diagnosing the platform is what fixes all of its calls.
+    const example = failed.find(
+      (f) => (hostOf(f.entry.resolvedUrl) || hostOf(f.entry.dialinUrl)) === host && (f.entry.resolvedUrl || f.entry.dialinUrl)
+    );
+    if (example) console.log(`       e.g. ${example.entry.resolvedUrl || example.entry.dialinUrl}`);
   }
   console.log('');
   console.log('  A cause seen once is a curiosity. The same platform failing repeatedly is');
