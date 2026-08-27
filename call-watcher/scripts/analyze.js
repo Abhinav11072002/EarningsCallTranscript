@@ -83,6 +83,27 @@ const CAUSES = [
     action: 'Look for a slow provider page; prepareDeadlineMs and triggerDeadlineMs bound this',
   },
   {
+    match: /does not extend the truncated prefix/i,
+    cause: 'Click-resolved link belonged to a different row',
+    action:
+      'The portal shows a truncated URL and the resolver finds the row by SYMBOL TEXT alone, so a ' +
+      'dual-listed pair (CM/CM.TO, HAR.JO/HMY, EKTA-B.ST/EKTAF) can match each other. Refusing is ' +
+      'correct - recording the wrong call would be worse - but the resolver should match on symbol ' +
+      'AND fiscal period',
+  },
+  {
+    match: /Target (?:page|closed|context|crashed)|has been closed|Target closed/i,
+    cause: 'The tab was closed while a step was still running',
+    action:
+      'Usually a provider page that navigated or self-closed mid-flow. Check whether the same ' +
+      'symbol also has a successful attempt - if so this was a retry racing its own cleanup',
+  },
+  {
+    match: /net::ERR_|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION|ERR_ABORTED/i,
+    cause: 'The provider page would not load at all',
+    action: 'Open the URL by hand. A dead or geo-blocked link is not something the watcher can work around',
+  },
+  {
     match: /Refusing to record/i,
     cause: 'Refused for another reason',
     action: 'Read the full message in the log - the guard names what it objected to',
@@ -95,7 +116,13 @@ function classify(error) {
     if (entry.match.test(text)) return entry;
   }
   // Unrecognised: group by the opening words so a new recurring failure still clusters.
-  const gist = text.split(/[:(]/)[0].trim().slice(0, 60) || 'Unknown';
+  //
+  // Splitting on the first colon is right for our own messages, which read as prose, and wrong
+  // for a Playwright error, which begins with the API name: "page.goto: Timeout 30000ms
+  // exceeded" collapsed to the single useless word "page.goto". If the first segment has no
+  // space in it, it is an API name rather than a sentence, so keep more of the message.
+  const head = text.split(/[:(]/)[0].trim();
+  const gist = (head.includes(' ') ? head : text.trim()).slice(0, 60) || 'Unknown';
   return { cause: gist, action: 'Not yet recognised - if this recurs it is worth a rule of its own' };
 }
 

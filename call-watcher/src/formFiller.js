@@ -80,6 +80,13 @@ async function describeField(el) {
       for (const c of candidates) {
         const text = (c.textContent || '').trim();
         if (!text || text.length > 60) continue;
+        // A candidate has to actually say something. openbriefing puts a required marker -
+        // <span class="required">*</span> - immediately above every input and left-aligned with
+        // it, so the horizontal tie-break below preferred that asterisk to the real label
+        // sitting a few pixels to its right. Every field on that provider read as "*", matched
+        // nothing, and the form was submitted empty: ten calls over three days, the single
+        // biggest cause in the ledger.
+        if (!/[A-Za-z]{2}/.test(text)) continue;
         const r = c.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) continue;
 

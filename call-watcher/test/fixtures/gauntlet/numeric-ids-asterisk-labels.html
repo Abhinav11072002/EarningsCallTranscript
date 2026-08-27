@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Webcast - Registration</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    webcast.openbriefing.com, reproduced from the live page. The single biggest cause of lost
+    calls in the ledger: ten over three days, all reported as "Registration gate still appears
+    active" because the form was submitted completely empty.
+
+    Two things make it hostile, and the second one is self-inflicted:
+
+    1. The fields carry no semantic hint whatsoever. id and name are database column numbers -
+       43200, 43201, 43202 - so every attribute-based match fails and the geometric label guess
+       is the only thing left.
+
+    2. A required marker <span class="required">*</span> sits immediately above each input and
+       is LEFT-ALIGNED with it, while the real label sits a few pixels to its right. The
+       horizontal tie-break added to fix q4inc's side-by-side First/Last name columns therefore
+       preferred the asterisk, and every field read as "*".
+
+    The visible label is a span, not a <label> - no `for`, no wrapping, no aria-label - which is
+    why the geometric guess is load-bearing here rather than a nicety.
+  -->
+  <div class="registration-title">Please Register Below</div>
+
+  <form name="register_form" id="register_form" method="POST" action="#">
+    <div id="registration_field_container43200" class="input_item">
+      <span class="required">*</span><span class="field_label">Full Name</span><br />
+      <input type="text" class="field_input" id="43200" name="43200" size="30" data-expect="fullName" />
+    </div>
+    <div id="registration_field_container43201" class="input_item">
+      <span class="required">*</span><span class="field_label">Email Address</span><br />
+      <input type="text" class="field_input" id="43201" name="43201" size="30" data-expect="email" />
+    </div>
+    <div id="registration_field_container43202" class="input_item">
+      <span class="required">*</span><span class="field_label">Company</span><br />
+      <input type="text" class="field_input" id="43202" name="43202" size="30" data-expect="company" />
+    </div>
+    <div><input id="webcast_register_button" type="submit" value="Register" name="DoRegistration"></div>
+    <span id="store_registration">
+      <input type="checkbox" checked id="register_cookie" name="register_cookie">
+      <label for="register_cookie">Remember Registration Information</label>
+    </span>
+  </form>
+
+  <div class="form_seperator"></div>
+
+  <!--
+    The second form on the same page. Its one field IS labelled "Email Address", so it matches
+    on attributes alone - it is the registration fields above that were the problem, not this.
+  -->
+  <form name="login_form" id="login_form" method="POST" action="#">
+    <div class="input_item">
+      <span class="required">*</span><span class="field_label">Email Address</span><br />
+      <input type="text" class="field_input" id="primary" name="primary" size="30" />
+    </div>
+    <div><input id="webcast_login_button" type="submit" value="Login" name="DoLogin"></div>
+  </form>
+
+  <div id="console" style="display:none" data-incall>Webcast console - you are registered.</div>
+
+  <script>
+    document.getElementById('register_form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const ids = ['43200', '43201', '43202'];
+      const empty = ids.filter((id) => !document.getElementById(id).value.trim());
+      if (empty.length) {
+        // Exactly what the live site does, and exactly what the ledger recorded: the gate is
+        // still there afterwards, and nothing says which field was missing.
+        document.querySelector('.registration-title').textContent =
+          'All fields are required. Please Register Below';
+        return;
+      }
+      document.getElementById('register_form').style.display = 'none';
+      document.getElementById('login_form').style.display = 'none';
+      document.getElementById('console').style.display = 'block';
+    });
+  </script>
+</body>
+</html>
