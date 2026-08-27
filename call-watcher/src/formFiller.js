@@ -17,11 +17,16 @@ const FIELD_PATTERNS = [
   { key: 'fullName', regex: /(?:^|\s)(?:full[\s_-]*name|your[\s_-]*name|name)(?![A-Za-z])/i },
   { key: 'email', regex: /e-?mail/i },
   { key: 'phone', regex: /phone|mobile|tel(ephone)?/i },
-  { key: 'company', regex: /company|organi[sz]ation|institution|firm/i },  // 'company-name' matches on 'company' alone
+  // BEFORE company, and the order is the whole point. The first pattern to match wins, and
+  // q4inc labels its job-title field "Company Role" - which matches `company` on the word
+  // "Company", so the role box was filled with the company name while the real company field
+  // was left to a lookup that had already refused it. Two fields, one value, both wrong.
+  //
   // Deliberately not bare "title": a salutation field is labelled "Title" too, and answering
   // that with a job title selects nothing and can fail the form. Observed unmatched on
   // reg.lumiengage.com, whose required "Position" field was left empty on every attempt.
   { key: 'jobTitle', regex: /job[\s_-]*title|position|\brole\b|designation|occupation/i },
+  { key: 'company', regex: /company|organi[sz]ation|institution|firm/i },  // 'company-name' matches on 'company' alone
   { key: 'country', regex: /country/i },
 ];
 
@@ -262,7 +267,13 @@ const FURNITURE_SELECTOR = 'nav, header, footer, [role=navigation], [role=search
 const IRRELEVANT_FIELD_PATTERN = /newsletter|subscrib|search|promo|coupon|discount|voucher/i;
 
 // Buttons that must never be clicked while hunting for a registration CTA.
-const IRRELEVANT_BUTTON_PATTERN = /subscrib|newsletter|search|cookie|privacy|settings|preferences/i;
+// "Create Account" is an upsell, never a way in. q4inc shows it on the page AFTER a successful
+// registration - "Want to avoid registration for future Q4 hosted earning events?" - and it
+// matches REGISTRATION_BUTTON_PATTERN on the bare word "account", so a call that had just
+// registered correctly was clicked straight off the event and onto identity.q4inc.com. We
+// cannot create an account in any case: it needs a verified mailbox.
+const IRRELEVANT_BUTTON_PATTERN =
+  /subscrib|newsletter|search|cookie|privacy|settings|preferences|create\s+(?:a|an)?\s*account|sign\s*up/i;
 
 // Gates we have no way to satisfy - a passcode, PIN, attendee ID or conference code. None of
 // these match the identity patterns, so before this they read as "no gate at all".
@@ -616,6 +627,59 @@ async function fillRequiredUnmatched(frame, identity, logger) {
   return filled;
 }
 
+// Ticks a checkbox that a UI library has hidden behind its own label.
+//
+// The real input is often visually hidden and the styled <label> sits on top of it, so
+// Playwright's check() retries for its full timeout and gives up with "<label ...> intercepts
+// pointer events". Measured on q4inc, whose entire registration hinges on one such checkbox.
+//
+// The label is what a person clicks, so clicking the label is not a workaround - it is the
+// correct target. check() is still tried first because it verifies the resulting state.
+async function tickCheckbox(frame, checkbox, label, logger, reason) {
+  if (await checkbox.isChecked().catch(() => false)) return true;
+
+  const direct = await checkbox
+    .check({ timeout: 3000 })
+    .then(() => true)
+    .catch(() => false);
+  if (direct) {
+    logger.info(`Ticked ${reason}: ${label}`);
+    return true;
+  }
+
+  const clickedLabel = await checkbox
+    .evaluate((node) => {
+      const target =
+        (node.id && document.querySelector(`label[for="${node.id}"]`)) || node.closest('label');
+      if (!target) return false;
+      target.click();
+      return true;
+    })
+    .catch(() => false);
+
+  if (clickedLabel && (await checkbox.isChecked().catch(() => false))) {
+    logger.info(`Ticked ${reason} via its label: ${label}`);
+    return true;
+  }
+
+  logger.warn(`Could not tick ${reason} "${label}" - neither the box nor its label responded.`);
+  return false;
+}
+
+// Checkboxes that make OTHER fields unnecessary.
+//
+// q4inc's guest form requires a Company Name, and supplies it through a lookup against their
+// own directory of institutions: a made-up name returns "0 results", free text is discarded on
+// blur, and the form cannot be submitted. There is no way to answer it.
+//
+// The way through is the box marked "I am an individual attendee", which turns both Company
+// Name and Company Role into "(not required)" and clears the error. Ticking it is not a trick -
+// it is simply true of the identity being used, which represents no institution.
+//
+// Six calls in the current book and seven in the last three days were lost to this one box.
+const WAIVER_CHECKBOX_PATTERN =
+  /individual attendee|individual investor|retail investor|private investor|not affiliated|no company|do not represent/i;
+
 const CONSENT_TEXT_PATTERN = /agree|consent|terms|condition|privacy|policy|acknowledge|accept/i;
 
 // A consent question can be a Yes/No RADIO PAIR rather than a checkbox, and until now nothing
@@ -727,10 +791,24 @@ async function checkRequiredConsent(frame, logger) {
 
     if (!reason) continue;
     const label = (description || '').trim().slice(0, 60) || 'an unlabelled checkbox';
-    await checkbox
-      .check()
-      .then(() => logger.info(`Ticked consent checkbox (${reason}): ${label}`))
-      .catch((err) => logger.warn(`Could not check consent box "${label}": ${err.message}`));
+    await tickCheckbox(frame, checkbox, label, logger, `consent checkbox (${reason})`);
+  }
+}
+
+// Ticked BEFORE anything is filled, because it changes what the form requires: on q4inc it
+// turns the unanswerable Company Name lookup into an optional field, so the fill that follows
+// has nothing left to fail on.
+async function tickWaiverCheckboxes(frame, logger) {
+  const checkboxes = await frame.$$('input[type=checkbox]:visible').catch(() => []);
+  for (const checkbox of checkboxes) {
+    if (await checkbox.isChecked().catch(() => false)) continue;
+    if (await isFurniture(checkbox)) continue;
+
+    const description = await describeField(checkbox);
+    if (!WAIVER_CHECKBOX_PATTERN.test(description)) continue;
+
+    const label = (description || '').trim().slice(0, 60) || 'an unlabelled checkbox';
+    await tickCheckbox(frame, checkbox, label, logger, 'the individual-attendee box');
   }
 }
 
@@ -1029,6 +1107,14 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
   // real form gate probably is too, and that must stay a loud failure.
   const clearedEntryButtons = new Set();
   for (let step = 0; step < maxSteps; step++) {
+    // Stop the moment the provider says we are in. Without this the next step reads the
+    // confirmation page as another form to work on, and clicks whatever button it offers -
+    // which on q4inc is "Create Account", leading off the event entirely. Registering and then
+    // navigating away is worse than failing to register: it looks like progress.
+    if (step > 0 && (await hasRegistrationSuccess(page).catch(() => false))) {
+      logger.info('The provider confirmed the registration; leaving the page alone.');
+      break;
+    }
     let acted = false;
     for (const frame of registrationFrames(page)) {
       const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
@@ -1052,6 +1138,7 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
       filledCount += await fillUnmatchedSelects(frame, identity, logger);
       await checkRequiredConsent(frame, logger);
       await answerConsentRadios(frame, logger);
+      await tickWaiverCheckboxes(frame, logger);
       // Last, so it only ever sees what everything else declined to answer.
       await fillRequiredUnmatched(frame, identity, logger);
       const outcome = await clickFirstMatchingButton(page, frame, logger, filledCount > 0, filledCount === 0);

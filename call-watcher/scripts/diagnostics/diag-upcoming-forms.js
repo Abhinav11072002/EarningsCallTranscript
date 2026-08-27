@@ -9,9 +9,23 @@
 // predict the failure was on the provider's page days earlier. This reads it early, so a form
 // that cannot be completed is a task in the morning rather than a lost call at 09:00.
 //
-// What it will NOT do: fill a field, tick a box, or press a submit button. It navigates and, on
-// pages whose form sits behind an entry click, follows that - the same steps the watcher takes
-// before it ever types anything.
+// Two modes, and the difference matters:
+//
+//   default   read-only. Navigates and follows entry clicks, but fills nothing and submits
+//             nothing. Answers "can the matcher read this form?"
+//
+//   --fill    runs the REAL registration - fills the form with the dummy identity and submits
+//             it, exactly as the watcher would. Answers the only question that counts: "would
+//             this call have been recorded?"
+//
+// Read-only mode cannot answer that second question, and reporting as though it could is
+// misleading: on most providers the player exists only AFTER registration, so a read-only pass
+// stops at the gate and then reports that there is no player behind it. The first run of this
+// tool did exactly that and called six healthy q4inc events "NO PLAYER".
+//
+// --fill submits real registrations to real providers under the dummy identity. That is what
+// the watcher does on every call anyway, but it is not read-only and should not be run casually.
+// It never triggers the extension and never records.
 //
 // WHEN to run it: on the morning of the calls, not days ahead. A provider page for an event
 // that has not started yet legitimately has no player, and several show an outright error until
@@ -23,7 +37,7 @@
 // Usage:
 //   node scripts/diagnostics/diag-upcoming-forms.js            last 40 rows with a link
 //   node scripts/diagnostics/diag-upcoming-forms.js 15         last 15
-//   node scripts/diagnostics/diag-upcoming-forms.js 40 --all   include rows already recorded
+//   node scripts/diagnostics/diag-upcoming-forms.js 40 --fill  actually fill and submit
 const { chromium } = require('playwright-core');
 const { loadConfig } = require('../../src/loadConfig');
 const { extractRows, minutesUntilCall } = require('../../src/tableWatcher');
@@ -31,13 +45,15 @@ const { getOrOpenPortalPage } = require('../../src/browserConnect');
 const { resolveDialinLinkByClick } = require('../../src/dialinLinkClickResolver');
 const { resolveWebcastPage } = require('../../src/webcastResolver');
 const { advanceJoinFlow, describeJoinBlocker } = require('../../src/joinFlow');
-const { inspectFields } = require('../../src/formFiller');
+const { inspectFields, fillRegistrationForm } = require('../../src/formFiller');
+const { ensurePlaying, installAudioProbe } = require('../../src/playback');
 const { rewriteToWebcastUrl, telephoneOnlyReason } = require('../../src/providerRules');
 const { playerProbe } = require('../../src/pageRelevance');
 const { splitFiscalPeriod } = require('../../src/extensionTrigger');
 
 const limit = Number(process.argv.find((a) => /^\d+$/.test(a)) || 40);
 const verbose = process.argv.includes('--verbose');
+const fillMode = process.argv.includes('--fill');
 
 const logger = {
   info: (m) => verbose && console.log('        [INFO]', m),
@@ -86,6 +102,16 @@ async function rehearse(context, row, config) {
       attempt: 1,
     });
     page = await advanceJoinFlow(page, logger);
+
+    if (fillMode) {
+      // Exactly the sequence src/index.js runs, minus the extension trigger.
+      const registration = await fillRegistrationForm(page, config.dummyIdentity, logger, undefined, { attempt: 1 });
+      if (registration.page) page = registration.page;
+      out.pending = Boolean(registration.pending);
+      page = await advanceJoinFlow(page, logger);
+      out.playback = await ensurePlaying(page, logger).catch(() => null);
+    }
+
     out.host = hostOf(page.url());
 
     const blocker = await describeJoinBlocker(page).catch(() => null);
@@ -98,7 +124,17 @@ async function rehearse(context, row, config) {
 
     const unmatched = out.fields.filter((f) => !f.matchedKey && f.type !== 'checkbox' && f.type !== 'radio');
 
-    if (unmatched.length) {
+    // In fill mode the gate is the headline: a form still standing after a real attempt is the
+    // failure that costs calls, and it outranks anything the read-only checks noticed.
+    if (fillMode && out.pending) {
+      out.verdict = 'GATE UP';
+      out.detail = unmatched.length
+        ? `unfilled: ${unmatched.map((f) => JSON.stringify(f.description.slice(0, 30))).join(', ')}`
+        : 'every field filled and the gate is still there';
+    } else if (fillMode && (player || (out.playback && out.playback.audible))) {
+      out.verdict = 'JOINED';
+      out.detail = out.playback ? out.playback.action : 'player present';
+    } else if (unmatched.length) {
       out.verdict = 'FIELDS';
       out.detail = unmatched.map((f) => JSON.stringify(f.description.slice(0, 34))).join(', ');
     } else if (blocker) {
@@ -131,6 +167,9 @@ async function rehearse(context, row, config) {
   const config = loadConfig();
   const browser = await chromium.connectOverCDP(config.cdpUrl);
   const context = browser.contexts()[0];
+  // Only meaningful in fill mode, where playback is actually exercised - but harmless either
+  // way, and it has to be installed before any page navigates. See playback.js.
+  await installAudioProbe(context);
   const portalPage = await getOrOpenPortalPage(context, config.portalUrl);
 
   const all = await extractRows(portalPage);
@@ -139,7 +178,11 @@ async function rehearse(context, row, config) {
 
   console.log('');
   console.log(`Portal shows ${all.length} row(s), ${withLinks.length} with a dial-in link. Rehearsing the last ${rows.length}.`);
-  console.log('Nothing is filled, submitted or recorded.');
+  console.log(
+    fillMode
+      ? 'FILL MODE: forms will be filled and submitted for real. Nothing is recorded.'
+      : 'Read-only: nothing is filled, submitted or recorded.'
+  );
   console.log('='.repeat(104));
 
   // Truncated links have to be resolved by clicking the portal, which is a shared page - so
@@ -165,7 +208,11 @@ async function rehearse(context, row, config) {
   const by = (v) => results.filter((r) => r.verdict === v);
   console.log('');
   console.log('='.repeat(104));
-  console.log(`  OK          ${by('OK').length}   would be filled and joined`);
+  if (fillMode) {
+    console.log(`  JOINED      ${by('JOINED').length}   registered and reached a player - would have recorded`);
+    console.log(`  GATE UP     ${by('GATE UP').length}   the form was filled and the gate is STILL there - the real failures`);
+  }
+  console.log(`  OK          ${by('OK').length}   ${fillMode ? 'no gate, nothing to fill' : 'would be filled and joined'}`);
   console.log(`  FIELDS      ${by('FIELDS').length}   a field the matcher cannot identify - fix these first`);
   console.log(`  BLOCKED     ${by('BLOCKED').length}   a gate in the way (passcode, CAPTCHA, sign-in)`);
   console.log(`  NO PLAYER   ${by('NO PLAYER').length}   nothing to record, and the call is due - a real problem`);
@@ -176,7 +223,7 @@ async function rehearse(context, row, config) {
   // Grouped, because one provider failing five times is one afternoon's work, not five.
   const hosts = new Map();
   // NOT LIVE is deliberately excluded: it is not evidence of anything.
-  for (const r of results.filter((r) => ['FIELDS', 'BLOCKED', 'NO PLAYER', 'ERROR'].includes(r.verdict))) {
+  for (const r of results.filter((r) => ['GATE UP', 'FIELDS', 'BLOCKED', 'NO PLAYER', 'ERROR'].includes(r.verdict))) {
     if (!hosts.has(r.host)) hosts.set(r.host, []);
     hosts.get(r.host).push(r.key);
   }

@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Credo Technology Group Holding Ltd - Q1 FY2027 Earnings Conference Call</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    events.q4inc.com guest registration, reproduced from the live page. The worst provider in
+    the book - seven calls in the last three days, six more in the current one - and the
+    diagnostic said "Every field would be filled" the whole time.
+
+    Three things had to be true at once for this to fail, and all three are general:
+
+    1. "Company Role" is a job-title field, and it matches the company pattern on the word
+       "Company". Whichever pattern is checked first wins, so the role box was filled with the
+       company name.
+
+    2. Company Name is a lookup against q4's own directory of institutions. A made-up name
+       returns "0 results available for search term", free text is discarded on blur, and there
+       is no way to answer it. Verified on the live form.
+
+    3. The way through is the "I am an individual attendee" box, which turns both company fields
+       into "(not required)". Ticking it is simply true of the identity we use. But the input is
+       visually hidden behind its styled label, so check() spends its whole timeout reporting
+       "<label ...> intercepts pointer events" - and the label is what a person clicks anyway.
+
+    The lookup is marked data-forbidden: with the box ticked it is not required, and typing into
+    a directory that cannot accept the value achieves nothing.
+  -->
+  <h1>Credo Technology Group Holding Ltd - Q1 FY2027 Earnings Conference Call</h1>
+  <h2>Guest Registration</h2>
+
+  <form id="reg">
+    <label for="first">First Name</label>
+    <input type="text" id="first" name="first" required data-expect="firstName">
+
+    <label for="last">Last Name</label>
+    <input type="text" id="last" name="last" required data-expect="lastName">
+
+    <label for="mail">Email</label>
+    <input type="email" id="mail" name="mail" required data-expect="email">
+
+    <!--
+      The input is hidden underneath the label, exactly as the live page renders it. Clicking
+      the input directly is impossible; clicking the label is what works.
+    -->
+    <div style="position:relative;height:26px">
+      <input type="checkbox" id="individual" name="individual"
+             style="position:absolute;left:0;top:0;opacity:0.01;width:16px;height:16px">
+      <label id="individual-label" for="individual"
+             style="position:absolute;left:0;top:0;width:280px;height:24px;background:transparent">
+        I am an individual attendee
+      </label>
+    </div>
+
+    <label for="institution">Company Name</label>
+    <input type="text" id="institution" name="institution" role="combobox" autocomplete="off"
+           placeholder="Search for or provide your company name" data-forbidden="true" data-expect="none">
+
+    <label for="role">Company Role</label>
+    <input type="text" id="role" name="role" data-expect="jobTitle">
+
+    <button type="submit" id="submit">Register for this Event</button>
+  </form>
+
+  <p id="error" style="display:none">Errors - , Company name required.</p>
+  <div id="console" style="display:none" data-incall>Webcast console</div>
+
+  <div id="after" style="display:none">
+    <p>Thank you for registering! You can access the webcast up to 15 minutes before the start time.</p>
+    <p>Want to avoid registration for future Q4 hosted earning events?</p>
+    <button type="button" id="create-account" data-forbidden="true">Create Account</button>
+  </div>
+
+  <script>
+    // The lookup only ever accepts a directory entry, so anything typed is discarded on blur -
+    // the behaviour that makes the checkbox the only way through.
+    document.getElementById('institution').addEventListener('blur', (e) => { e.target.value = ''; });
+
+    document.getElementById('reg').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const individual = document.getElementById('individual').checked;
+      const named = document.getElementById('institution').value.trim();
+      const basics = ['first', 'last', 'mail'].every((id) => document.getElementById(id).value.trim());
+      // Company is required unless the attendee says they represent nobody.
+      if (!basics || (!individual && !named)) {
+        document.getElementById('error').style.display = 'block';
+        return;
+      }
+      document.getElementById('reg').style.display = 'none';
+      document.getElementById('error').style.display = 'none';
+      document.getElementById('console').style.display = 'block';
+      // The upsell the live page shows after a successful registration. Clicking it leaves the
+      // event for the identity provider, so it is marked forbidden.
+      document.getElementById('after').style.display = 'block';
+    });
+  </script>
+</body>
+</html>
