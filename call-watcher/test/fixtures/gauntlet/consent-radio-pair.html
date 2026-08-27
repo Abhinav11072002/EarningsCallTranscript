@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Corby FY26 Year End Earnings Call - webinar.net</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    app.webinar.net, reproduced from the live page. Every text field filled correctly and the
+    call still lost: the required consent is a RADIO PAIR, and nothing in the filler answered
+    radios at all. The diagnostic showed four matched fields and two "-- no match --" radios.
+
+    The second group is the trap. It is a genuine Yes/No question with no consent subject
+    matter, so it must be left alone - guessing an answer to an unrelated question is not the
+    filler's business, and the form does not require it.
+
+    The third group is the dangerous shape: BOTH options mention understanding, so neither can
+    be read as unambiguous agreement. Choosing "No" here would submit a refusal, which cannot
+    be retried - unlike leaving it blank. It must stay untouched.
+  -->
+  <h1>Corby FY26 Year End Earnings Call</h1>
+
+  <form id="reg">
+    <label for="field-first-name">First Name *</label>
+    <input type="text" id="field-first-name" name="field-first-name" data-expect="firstName">
+
+    <label for="field-last-name">Last Name *</label>
+    <input type="text" id="field-last-name" name="field-last-name" data-expect="lastName">
+
+    <label for="field-company">Company *</label>
+    <input type="text" id="field-company" name="field-company" data-expect="company">
+
+    <label for="field-email-address">Email Address *</label>
+    <input type="text" id="field-email-address" name="field-email-address" data-expect="email">
+
+    <fieldset>
+      <legend>Data processing *</legend>
+      <label><input type="radio" name="consent" id="consent-yes" value="yes">
+        Yes. I understand that my information will be processed and shared with the host.</label>
+      <label><input type="radio" name="consent" id="consent-no" value="no">
+        No. I do not want my information processed.</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Are you an existing shareholder?</legend>
+      <label><input type="radio" name="shareholder" id="shareholder-yes" data-forbidden="true" value="yes"> Yes</label>
+      <label><input type="radio" name="shareholder" id="shareholder-no" data-forbidden="true" value="no"> No</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Ambiguous pair - both mention understanding</legend>
+      <label><input type="radio" name="ambiguous" id="ambiguous-a" data-forbidden="true" value="a">
+        Yes. I understand my personal data will be processed.</label>
+      <label><input type="radio" name="ambiguous" id="ambiguous-b" data-forbidden="true" value="b">
+        No. I understand, but do not want my personal data processed.</label>
+    </fieldset>
+
+    <button type="submit" id="submit">Register</button>
+  </form>
+
+  <div id="player" style="display:none">
+    <div data-incall>Webcast console</div>
+    <audio id="stream" controls></audio>
+  </div>
+
+  <p id="error" style="display:none">Please answer all required questions.</p>
+
+  <script>
+    document.getElementById('reg').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const consented = document.getElementById('consent-yes').checked;
+      if (!consented) {
+        document.getElementById('error').style.display = 'block';
+        return;
+      }
+      document.getElementById('reg').style.display = 'none';
+      document.getElementById('player').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

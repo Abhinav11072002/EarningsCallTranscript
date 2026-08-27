@@ -442,6 +442,75 @@ async function fillUnmatchedSelects(frame, identity, logger) {
 
 const CONSENT_TEXT_PATTERN = /agree|consent|terms|condition|privacy|policy|acknowledge|accept/i;
 
+// A consent question can be a Yes/No RADIO PAIR rather than a checkbox, and until now nothing
+// answered those. app.webinar.net asks:
+//
+//   ( ) Yes. I understand that my information will be processed and shared with the host
+//   ( ) No. I do not want my information processed
+//
+// Neither is pre-selected, one of them is required, so the form was rejected and the call was
+// reported as a registration failure with every text field correctly filled. The diagnostic
+// showed it plainly - two radios, "-- no match --".
+//
+// Answering a radio needs more care than ticking a checkbox, because the wrong option is
+// actively harmful: "No" is right there next to "Yes", and choosing it submits a refusal that
+// keeps us out for good rather than leaving the form untouched. Three conditions therefore have
+// to hold together before anything is clicked:
+//
+//   1. the group offers both an affirmative AND a negative option - a Yes/No shape, not a list
+//   2. the two are unambiguous: an option matching BOTH patterns disqualifies itself, so
+//      "No. I understand, but do not want..." is left alone rather than read as agreement
+//   3. the subject matter is consent, not just any yes/no question
+//
+// When any of them fails the group is skipped. Doing nothing loses a call; answering "No"
+// loses it and cannot be retried.
+const AFFIRMATIVE_CONSENT_PATTERN = /\byes\b|\bi (?:agree|consent|accept|understand)\b|\bopt[\s-]?in\b/i;
+const NEGATIVE_CONSENT_PATTERN =
+  /\bno\b|\bi do not\b|\bi don'?t\b|\bdo not want\b|\bopt[\s-]?out\b|\bdecline\b|\brefuse\b/i;
+const CONSENT_SUBJECT_PATTERN =
+  /consent|process(?:ed|ing)?|privacy|policy|terms|personal (?:data|information)|my (?:data|information|details)|communications?|marketing|contact me|shared? with/i;
+
+async function answerConsentRadios(frame, logger) {
+  const radios = await frame.$$('input[type=radio]:visible').catch(() => []);
+  const groups = new Map();
+
+  for (const radio of radios) {
+    if (await isFurniture(radio)) continue;
+    // Grouped by name, which is what makes them mutually exclusive in the first place. Radios
+    // with no name are grouped together under one key rather than dropped: a hand-rolled form
+    // that manages exclusivity in JavaScript still asks a single question.
+    const name = (await radio.getAttribute('name').catch(() => '')) || '(unnamed)';
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push({ radio, description: await describeField(radio) });
+  }
+
+  for (const options of groups.values()) {
+    if (options.length < 2) continue;
+
+    let alreadyAnswered = false;
+    for (const option of options) {
+      if (await option.radio.isChecked().catch(() => false)) alreadyAnswered = true;
+    }
+    if (alreadyAnswered) continue;
+
+    // Mutual exclusion, not just a match: see condition 2 above.
+    const affirmative = options.find(
+      (o) => AFFIRMATIVE_CONSENT_PATTERN.test(o.description) && !NEGATIVE_CONSENT_PATTERN.test(o.description)
+    );
+    const negative = options.find(
+      (o) => NEGATIVE_CONSENT_PATTERN.test(o.description) && !AFFIRMATIVE_CONSENT_PATTERN.test(o.description)
+    );
+    if (!affirmative || !negative) continue;
+    if (!CONSENT_SUBJECT_PATTERN.test(options.map((o) => o.description).join(' '))) continue;
+
+    const label = affirmative.description.trim().slice(0, 60) || 'an unlabelled option';
+    await affirmative.radio
+      .check()
+      .then(() => logger.info(`Answered a consent question: ${label}`))
+      .catch((err) => logger.warn(`Could not select consent option "${label}": ${err.message}`));
+  }
+}
+
 async function checkRequiredConsent(frame, logger) {
   const checkboxes = await frame.$$('input[type=checkbox]:visible').catch(() => []);
   for (const checkbox of checkboxes) {
@@ -608,8 +677,32 @@ async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback
     if (NATIVE_APP_PATTERN.test(text)) continue;
     if (STALE_BUTTON_PATTERN.test(text)) continue;
     if (await isFurniture(btn)) continue;
-    const score = /continue\s+without|guest/i.test(text) ? 6 : /register|registration/i.test(text) ? 5 : /submit|continue|join|enter|watch now|listen now|access|attend/i.test(text) ? 4 : type === 'submit' ? 2 : 0;
     const entryWorded = REGISTRATION_BUTTON_PATTERN.test(text) || ENTRY_BUTTON_PATTERN.test(text);
+    // entryWorded has to earn a score of its own, or it is discarded two lines below by
+    // `if (!score)` before anything can act on it - which is what happened to every CTA whose
+    // wording ENTRY_BUTTON_PATTERN recognises but this narrower list does not.
+    //
+    // "Click Here to Watch Webcast" is the case that exposed it: ENTRY_BUTTON_PATTERN matches
+    // it on "Watch Webcast", but the list below only has "watch now", the button is
+    // type="button" rather than submit, so it scored 0 and was skipped. loghic.eventsair.com
+    // presents exactly one control - that button, no fields at all - so the run ended with
+    // "Controls present but none looked like a registration step" and the call was reported as
+    // a registration failure with no form anywhere in sight. Four calls. "Listen to the live
+    // webcast" and "Enter the event room" fail the same way.
+    //
+    // 3 puts it below an explicit Register or a submit-worded CTA, which are better bets when a
+    // page offers both, and above a bare unlabelled submit button, which is a guess.
+    const score = /continue\s+without|guest/i.test(text)
+      ? 6
+      : /register|registration/i.test(text)
+        ? 5
+        : /submit|continue|join|enter|watch now|listen now|access|attend/i.test(text)
+          ? 4
+          : entryWorded
+            ? 3
+            : type === 'submit'
+              ? 2
+              : 0;
     // A link only qualifies on explicit entry wording. Without this, "Contact Investor
     // Relations" or a footer link would become a candidate on almost every page.
     if (isPlainAnchor && !entryWorded) continue;
@@ -782,6 +875,7 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
       // resort, never in preference to a field we actually understand.
       filledCount += await fillUnmatchedSelects(frame, identity, logger);
       await checkRequiredConsent(frame, logger);
+      await answerConsentRadios(frame, logger);
       const outcome = await clickFirstMatchingButton(page, frame, logger, filledCount > 0, filledCount === 0);
       if (outcome.clicked && outcome.entryWorded && !REGISTRATION_BUTTON_PATTERN.test(outcome.clickedText)) {
         clearedEntryButtons.add(outcome.clickedText);

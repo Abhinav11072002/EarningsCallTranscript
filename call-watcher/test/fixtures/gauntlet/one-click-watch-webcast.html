@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Register</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    loghic.eventsair.com, reproduced from the live page. Four calls, every one of them reported
+    as "Registration gate still appears active after filling and submission attempts" - on a
+    page with no form and no fields whatsoever.
+
+    The whole gate is one button. ENTRY_BUTTON_PATTERN does match its wording, on "Watch
+    Webcast", and the candidate was then discarded anyway: the scoring list only had "watch
+    now", the button is type="button" rather than submit, so it scored 0 and `if (!score)`
+    dropped it before entryWorded was ever consulted.
+
+    Two controls carry the same text here, as on the live page - an anchor and a button - and
+    only one of them does anything. Whichever is clicked first must lead to the call.
+  -->
+  <h1>Register</h1>
+  <h2>FY26 Results and New Feasibility Study</h2>
+  <p>When? Thursday, 27 August 2026</p>
+  <p>What Time? 7:00am AWST / 9:00am AEST</p>
+  <p>Where? Online</p>
+
+  <a href="#" id="watch-link">Click Here to Watch Webcast</a>
+  <button type="button" id="watch-button">Click Here to Watch Webcast</button>
+  <!-- An unlabelled button, as on the live page. Nothing should prefer this. -->
+  <button type="button" data-forbidden="true" aria-label="close"></button>
+
+  <div id="player" style="display:none">
+    <div data-incall>Webcast console</div>
+    <audio id="stream" controls></audio>
+  </div>
+
+  <script>
+    const open = (e) => {
+      e.preventDefault();
+      document.getElementById('watch-link').style.display = 'none';
+      document.getElementById('watch-button').style.display = 'none';
+      document.getElementById('player').style.display = 'block';
+    };
+    document.getElementById('watch-link').addEventListener('click', open);
+    document.getElementById('watch-button').addEventListener('click', open);
+  </script>
+</body>
+</html>
