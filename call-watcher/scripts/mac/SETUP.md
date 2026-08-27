@@ -310,10 +310,30 @@ To update a machine:
 
 ```bash
 cw && git pull
-launchctl unload ~/Library/LaunchAgents/com.fmp.callwatcher.plist 2>/dev/null; launchctl load ~/Library/LaunchAgents/com.fmp.callwatcher.plist
+launchctl kickstart -k gui/$(id -u)/com.fmp.callwatcher
+tail -5 data/call-watcher-$(date +%F).log
 ```
 
-The reload is not optional — `git pull` alone leaves the old code running in memory.
+**The restart is not optional.** `git pull` changes the files on disk; the running process keeps
+the code it loaded at launch. `RunAtLoad` and `KeepAlive` mean the watcher starts itself and
+stays up — which is exactly why a pull on its own looks like it worked and changes nothing. The
+`tail` is the check: a fresh `Watching table every 20000ms` line with a current timestamp.
+
+Time the restart for a moment with nothing in the 15-minute window. A restart mid-capture is
+survivable — started calls are reconciled against the extension's stream list — but there is no
+reason to rely on that.
+
+**Read what `git pull` actually said.** These two lines mean the update did NOT arrive:
+
+```
+   295537a..750638e  main -> origin/main
+Already up to date.
+```
+
+It fetched the commits, and then the checked-out branch had nothing to fast-forward — i.e. the
+machine is not on `main`. `git branch --show-current` says which branch it is on; `git checkout
+main` fixes it. A successful pull says `295537a..750638e  main -> main`, with no arrow to
+`origin/`.
 
 ## When something is wrong
 
