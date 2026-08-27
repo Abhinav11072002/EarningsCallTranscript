@@ -551,6 +551,110 @@ async function fillUnmatchedSelects(frame, identity, logger) {
   return filled;
 }
 
+// A dropdown that is not a <select>.
+//
+// GTLB's registration on open-exchange.net asks for "Affiliation" and renders it as
+// <button role="combobox"> which opens a [role=listbox] of [role=option] items. There is no
+// <select> and no <input>, so every field query in this file walked straight past it - the
+// diagnostic reported four fields, all matched, and the form could not be submitted because
+// the fifth was required and invisible to us.
+//
+// This is not one provider's quirk. It is what every modern component library renders, and it
+// is the last shape of form control the filler could not see at all.
+//
+// The choice is made exactly as it is for a real <select>: "Other" if it is offered, and
+// nothing otherwise. GTLB's list is Buy-Side Analyst / Sell-Side Analyst / Individual
+// Shareholder / Media / Employee / Other - and picking any of the first five would assert
+// something specific and untrue about who is joining.
+const COMBOBOX_SELECTOR = '[role=combobox], [aria-haspopup=listbox]';
+const COMBOBOX_PLACEHOLDER_PATTERN = /^\s*(?:select(?:\s+an?\s+option)?|choose(?:\s+one)?|please\s+select|-{1,2}|)\s*$/i;
+
+// A combobox carries its label the way a button does - through aria-labelledby, aria-label or
+// its id - so describeField, which reads input attributes, has nothing to work with here.
+async function describeCombobox(element) {
+  return element
+    .evaluate((node) => {
+      const parts = [node.id || '', node.getAttribute('name') || '', node.getAttribute('aria-label') || ''];
+      const labelledBy = node.getAttribute('aria-labelledby');
+      if (labelledBy) {
+        for (const id of labelledBy.split(/\s+/)) {
+          const label = document.getElementById(id);
+          if (label) parts.push((label.innerText || '').trim());
+        }
+      }
+      return parts.filter(Boolean).join(' ');
+    })
+    .catch(() => '');
+}
+
+async function answerCustomComboboxes(frame, identity, logger) {
+  const comboboxes = await frame.$$(COMBOBOX_SELECTOR).catch(() => []);
+  let answered = 0;
+
+  for (const combobox of comboboxes) {
+    if (!(await combobox.isVisible().catch(() => false))) continue;
+    if (await combobox.isDisabled().catch(() => false)) continue;
+    if (await isFurniture(combobox)) continue;
+
+    // A combobox that is really a text input with a suggestion list belongs to the normal fill
+    // path, which has already had its turn at it.
+    const tag = await combobox.evaluate((node) => node.tagName.toLowerCase()).catch(() => '');
+    if (tag === 'input' || tag === 'select') continue;
+
+    const shown = ((await combobox.innerText().catch(() => '')) || '').trim();
+    // Already answered by a human or by the page's own default - leave it alone.
+    if (!COMBOBOX_PLACEHOLDER_PATTERN.test(shown)) continue;
+
+    const description = await describeCombobox(combobox);
+    if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
+
+    await combobox.click({ timeout: 4000 }).catch(() => {});
+    await frame.page().waitForTimeout(600);
+
+    // Options live outside the button, usually at the end of <body>, so they are searched for
+    // across the frame rather than within the control.
+    const options = await frame.$$('[role=option]:visible').catch(() => []);
+    if (!options.length) {
+      // Close it again: an open listbox covers whatever is underneath, and the submit button
+      // is often underneath.
+      await combobox.press('Escape').catch(() => {});
+      continue;
+    }
+
+    // An identity value wins when the label asks for something we actually know.
+    const key = matchField(description);
+    const wanted = key && identity[key] ? String(identity[key]) : null;
+
+    let picked = null;
+    for (const option of options) {
+      const text = ((await option.innerText().catch(() => '')) || '').trim();
+      if (!text || COMBOBOX_PLACEHOLDER_PATTERN.test(text)) continue;
+      const matches = wanted ? text.toLowerCase() === wanted.toLowerCase() : OTHER_OPTION_PATTERN.test(text);
+      if (!matches) continue;
+      const clicked = await option
+        .click({ timeout: 3000 })
+        .then(() => true)
+        .catch(() => false);
+      if (clicked) picked = text;
+      break;
+    }
+
+    if (!picked) {
+      await combobox.press('Escape').catch(() => {});
+      logger.warn(
+        `"${(description || 'a dropdown').trim().slice(0, 50)}" offers no answer we can honestly give; leaving it unset.`
+      );
+      continue;
+    }
+
+    await frame.page().waitForTimeout(400);
+    logger.info(`Answered "${(description || 'a dropdown').trim().slice(0, 50)}" with "${picked}".`);
+    answered++;
+  }
+  return answered;
+}
+
+
 // Last line of defence: a REQUIRED field that nothing identified is still filled.
 //
 // The form tells us it is required, we can see it is empty, and we submit anyway - so the
@@ -1160,6 +1264,7 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
       // Only once the identity fields are in: an unmatched dropdown is answered as a last
       // resort, never in preference to a field we actually understand.
       filledCount += await fillUnmatchedSelects(frame, identity, logger);
+      filledCount += await answerCustomComboboxes(frame, identity, logger);
       await checkRequiredConsent(frame, logger);
       await answerConsentRadios(frame, logger);
       await tickWaiverCheckboxes(frame, logger);

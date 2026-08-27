@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Registration | Q2FY27 GitLab Earnings Call</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    open-exchange.net, reproduced from the live GTLB page.
+
+    "Affiliation" is required and is not a <select>. It is a <button role="combobox"> that opens
+    a [role=listbox] of [role=option] items, so every field query in formFiller.js walked
+    straight past it: the diagnostic reported four fields, all matched, and the form still could
+    not be submitted because the fifth was required and invisible to us.
+
+    This is not one provider's quirk - it is what every modern component library renders, and it
+    was the last shape of control the filler could not see at all.
+
+    The choice is made exactly as it is for a real <select>: "Other" if offered, nothing
+    otherwise. The live list is Buy-Side Analyst / Sell-Side Analyst / Individual Shareholder /
+    Media / Employee / Other, and any of the first five would assert something specific and
+    untrue about who is joining - so they are marked forbidden here.
+  -->
+  <h1>Q2FY27 GitLab Earnings Call</h1>
+  <p>TUESDAY, SEPTEMBER 1, 2026 4:30pm ET</p>
+
+  <form id="reg">
+    <label for="firstName">First Name</label>
+    <input type="text" id="firstName" name="firstName" required data-expect="firstName">
+
+    <label for="lastName">Last Name</label>
+    <input type="text" id="lastName" name="lastName" required data-expect="lastName">
+
+    <label for="email">Email</label>
+    <input type="text" id="email" name="email" required data-expect="email">
+
+    <label for="organizationName">Organization</label>
+    <input type="text" id="organizationName" name="organizationName" required data-expect="company">
+
+    <span id="customField_51996-label">Affiliation</span>
+    <button type="button" role="combobox" id="customField_51996"
+            aria-labelledby="customField_51996-label" aria-haspopup="listbox">Select an option</button>
+    <ul id="affiliation-list" role="listbox" style="display:none">
+      <li role="option" data-value="">Select an option</li>
+      <li role="option" data-forbidden="true">Buy-Side Analyst</li>
+      <li role="option" data-forbidden="true">Sell-Side Analyst</li>
+      <li role="option" data-forbidden="true">Individual Shareholder</li>
+      <li role="option" data-forbidden="true">Media</li>
+      <li role="option" data-forbidden="true">Employee</li>
+      <li role="option">Other</li>
+    </ul>
+
+    <button type="submit" id="submit">Register</button>
+    <button type="button" id="signin" data-forbidden="true">Already registered? Sign In</button>
+  </form>
+
+  <div id="done" style="display:none">
+    <p>Thank you for registering.</p>
+    <div data-incall>Webcast console</div>
+    <audio id="stream" controls></audio>
+  </div>
+  <p id="error" style="display:none">Affiliation is required.</p>
+
+  <script>
+    const combo = document.getElementById('customField_51996');
+    const list = document.getElementById('affiliation-list');
+    let chosen = '';
+    combo.addEventListener('click', () => {
+      list.style.display = list.style.display === 'none' ? 'block' : 'none';
+    });
+    for (const option of list.querySelectorAll('[role=option]')) {
+      option.addEventListener('click', () => {
+        chosen = option.getAttribute('data-value') === '' ? '' : option.innerText.trim();
+        combo.innerText = option.innerText.trim();
+        list.style.display = 'none';
+      });
+    }
+    document.getElementById('reg').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const filled = ['firstName', 'lastName', 'email', 'organizationName']
+        .every((id) => document.getElementById(id).value.trim());
+      if (!filled || !chosen) {
+        document.getElementById('error').style.display = 'block';
+        return;
+      }
+      document.getElementById('reg').style.display = 'none';
+      document.getElementById('done').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

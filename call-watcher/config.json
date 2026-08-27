@@ -30,6 +30,7 @@
     "fallbackAnswer": "Other"
   },
   "knownDirectProviderDomains": [
+    "open-exchange.net",
     "edge.media-server.com",
     "webcasts.com",
     "choruscall.com",
