@@ -335,6 +335,19 @@ const ENTRY_BUTTON_PATTERN =
 // perfectly good CTA otherwise, and produces a capture that looks entirely successful.
 const STALE_BUTTON_PATTERN = /replay|archive|on-?demand|playback|recording|transcript|presentation|slides?|download/i;
 
+// Controls that SWITCH THE FORM to a different mode rather than submitting it. Clicking one
+// throws away everything just typed, which is worse than clicking nothing at all.
+//
+// "Already Registered?" on app.webinar.net is the example that cost the call: it matches the
+// registration pattern on the word "Register", ties with the real submit button on score, and
+// wins the tie by sitting earlier in the DOM. The filler completed the form, answered the
+// consent, clicked it, and was returned to an empty login view - then did the same thing again.
+//
+// Never taken, even though on a RETRY we genuinely have already registered: re-registering
+// works on every provider seen so far, and a wrongly-taken shortcut leaves no way back.
+const MODE_SWITCH_PATTERN =
+  /already\s+regist|already\s+have\s+an?\s+account|returning\s+(?:attendee|user|visitor)|(?:sign|log)\s*in\s+instead|switch\s+to\s+(?:login|sign)/i;
+
 const CTA_BUTTON_PATTERN = /register|submit|enter|join|continue|watch now|listen now|access|attend/i;
 const REGISTRATION_BUTTON_PATTERN = /register|registration|sign\s*in|log\s*in|account|continue\s+registration|continue\s+without|guest|join\s+(the\s+)?(webinar|conference|event)|attend\s+(the\s+)?event/i;
 
@@ -930,6 +943,7 @@ async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback
     // exactly what the extension keystroke needs moments later. See joinFlow.js.
     if (NATIVE_APP_PATTERN.test(text)) continue;
     if (STALE_BUTTON_PATTERN.test(text)) continue;
+    if (MODE_SWITCH_PATTERN.test(text)) continue;
     if (await isFurniture(btn)) continue;
     const entryWorded = REGISTRATION_BUTTON_PATTERN.test(text) || ENTRY_BUTTON_PATTERN.test(text);
     // entryWorded has to earn a score of its own, or it is discarded two lines below by
@@ -962,16 +976,26 @@ async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback
     if (isPlainAnchor && !entryWorded) continue;
     if (!score || (registrationOnly && !entryWorded)) continue;
     if (!CTA_BUTTON_PATTERN.test(text) && !entryWorded && !(allowSubmitFallback && type === 'submit')) continue;
-    candidates.push({ btn, text, score, entryWorded });
+    candidates.push({ btn, text, score, entryWorded, isSubmit: type === 'submit' });
   }
-  candidates.sort((a, b) => b.score - a.score);
+  // On a tie, a real submit button beats a link-styled control with the same wording. The two
+  // are routinely worded identically - "Register" the submit, "Already Registered?" the link -
+  // and before this the winner was decided by DOM order, which is not a signal about anything.
+  candidates.sort((a, b) => b.score - a.score || Number(b.isSubmit) - Number(a.isSubmit));
   for (const { btn, text, entryWorded } of candidates) {
     // The click itself is bounded inside clickAndAdoptPopup. Playwright's default is 30s, and
     // it spends all of it retrying a merely-disabled button - the normal state of Zoom's
     // "Join" before a name is typed. That ran under the pipeline lock, so every later call in
     // the window queued behind it.
     const result = await clickAndAdoptPopup(page, btn, text, logger);
-    if (result.clicked) return { clicked: true, page: result.page, clickedText: text, entryWorded };
+    if (result.clicked) {
+      // Logged because its absence is what made webinar.net hard to diagnose: the fields were
+      // filled, the consent was answered, the gate stayed up, and nothing in the log said
+      // whether a button had been pressed at all. "Filled but never submitted" and "submitted
+      // and rejected" need completely different fixes and looked identical.
+      logger.info(`Clicked "${text}".`);
+      return { clicked: true, page: result.page, clickedText: text, entryWorded };
+    }
   }
   return { clicked: false, page, clickedText: null, entryWorded: false };
 }

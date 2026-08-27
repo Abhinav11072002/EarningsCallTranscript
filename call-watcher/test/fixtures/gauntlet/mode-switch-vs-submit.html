@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Petco Second Quarter 2026 Earnings Conference Call</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    app.webinar.net, reproduced from the live page.
+
+    Every field was filled correctly and the consent radio answered, and the call was still
+    lost. "Already Registered?" is a MODE SWITCH: it swaps the registration form for a login
+    view and throws away everything just typed. It matches the registration pattern on the word
+    "Register", ties with the real submit button on score, and won the tie by sitting earlier in
+    the DOM - which is not a signal about anything.
+
+    So the filler completed the form, answered the consent, clicked it, landed back on an empty
+    view, and did the whole thing again. The log said nothing about any of it, because a click
+    was not logged at all: "filled but never submitted" and "submitted and rejected" looked
+    identical and need completely different fixes.
+
+    Two rules come out of it, and both are in the filler now: a mode switch is never clicked,
+    and on a tie a real submit button beats a link-styled control with the same wording.
+
+    The form appears only after "Register Now", as it does live.
+  -->
+  <h1>Petco Second Quarter 2026 Earnings Conference Call</h1>
+  <p>Date: Wednesday, September 2, 2026</p>
+
+  <button type="button" id="reveal">Register Now</button>
+
+  <form id="reg" style="display:none">
+    <label for="field-first-name">First Name *</label>
+    <input type="text" id="field-first-name" required data-expect="firstName">
+
+    <label for="field-last-name">Last Name *</label>
+    <input type="text" id="field-last-name" required data-expect="lastName">
+
+    <label for="field-company">Company *</label>
+    <input type="text" id="field-company" required data-expect="company">
+
+    <label for="field-email-address">Email Address *</label>
+    <input type="email" id="field-email-address" required data-expect="email">
+
+    <fieldset>
+      <legend>Data Collection Consent *</legend>
+      <label><input type="radio" name="consent" id="consent-yes">
+        Yes. I understand that my information will be processed and shared with the host.</label>
+      <label><input type="radio" name="consent" id="consent-no">
+        No. I do not want my information processed and shared.</label>
+    </fieldset>
+
+    <!-- Earlier in the DOM than the submit, and worded to match. The trap. -->
+    <button type="button" id="switch" class="btn btn-link" data-forbidden="true">Already Registered?</button>
+    <a href="#" data-forbidden="true">Terms of Use</a>
+    <a href="#" data-forbidden="true">Data Collection Consent</a>
+    <button type="submit" id="submit" class="btn btn-submit">Register</button>
+  </form>
+
+  <div id="console" style="display:none" data-incall>Webcast console</div>
+  <p id="error" style="display:none">Please complete all required fields.</p>
+
+  <script>
+    document.getElementById('reveal').addEventListener('click', () => {
+      document.getElementById('reveal').style.display = 'none';
+      document.getElementById('reg').style.display = 'block';
+    });
+    // Exactly what the live control does: swap to a login view, discarding the form.
+    document.getElementById('switch').addEventListener('click', () => {
+      for (const el of document.querySelectorAll('#reg input')) {
+        if (el.type === 'radio') el.checked = false; else el.value = '';
+      }
+      document.getElementById('reg').style.display = 'none';
+      document.getElementById('reveal').style.display = 'inline-block';
+    });
+    document.getElementById('reg').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const filled = ['field-first-name', 'field-last-name', 'field-company', 'field-email-address']
+        .every((id) => document.getElementById(id).value.trim());
+      if (!filled || !document.getElementById('consent-yes').checked) {
+        document.getElementById('error').style.display = 'block';
+        return;
+      }
+      document.getElementById('reg').style.display = 'none';
+      document.getElementById('console').style.display = 'block';
+    });
+  </script>
+</body>
+</html>
