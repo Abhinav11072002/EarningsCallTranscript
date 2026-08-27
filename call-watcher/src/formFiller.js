@@ -18,6 +18,10 @@ const FIELD_PATTERNS = [
   { key: 'email', regex: /e-?mail/i },
   { key: 'phone', regex: /phone|mobile|tel(ephone)?/i },
   { key: 'company', regex: /company|organi[sz]ation|institution|firm/i },  // 'company-name' matches on 'company' alone
+  // Deliberately not bare "title": a salutation field is labelled "Title" too, and answering
+  // that with a job title selects nothing and can fail the form. Observed unmatched on
+  // reg.lumiengage.com, whose required "Position" field was left empty on every attempt.
+  { key: 'jobTitle', regex: /job[\s_-]*title|position|\brole\b|designation|occupation/i },
   { key: 'country', regex: /country/i },
 ];
 
@@ -66,17 +70,83 @@ async function describeField(el) {
       // Horizontal alignment breaks the tie: a label belongs to the field beneath it, not to
       // its neighbour two hundred pixels away. Vertical distance still dominates, so a label
       // genuinely above a field is never beaten by one merely closer sideways.
+      // A field's GROUP: the largest ancestor that still contains only this field. On a table
+      // form that is the <tr>; on a modern form it is the wrapper <div>; on a flat form with no
+      // wrappers at all there is none.
+      //
+      // This is the single most reliable signal on a form, and it is not geometric: a label
+      // inside the field's own group belongs to that field whatever the pixels say. It is also
+      // how a person reads a form.
+      //
+      // Both bugs this replaced came from reaching outside the group for evidence. In a
+      // two-column table every left-hand label is ALSO directly above the input on the next
+      // row, and the above-the-field rule scores far better than the beside-the-field rule - so
+      // each label was claimed by the row below it and then discarded as belonging to another
+      // field, leaving every row after the first with no label at all.
+      const groupOf = (node) => {
+        let group = null;
+        let el = node.parentElement;
+        for (let depth = 0; el && depth < 6; depth++, el = el.parentElement) {
+          if (el.querySelectorAll('input:not([type=hidden]), select, textarea').length !== 1) break;
+          group = el;
+        }
+        return group;
+      };
+
+      // Plain edge-to-edge distance, used to order candidates inside a group where direction
+      // carries no meaning - a group holds one field, so everything in it describes that field.
+      const distanceTo = (target, labelRect) => {
+        const r = target.getBoundingClientRect();
+        const dx = Math.max(labelRect.left - r.right, r.left - labelRect.right, 0);
+        const dy = Math.max(labelRect.top - r.bottom, r.top - labelRect.bottom, 0);
+        return Math.round(Math.sqrt(dx * dx + dy * dy));
+      };
+
+      // Three placements, in strict preference order.
+      //
+      // Only the first existed until now, and it rejected the other two outright: a label
+      // BESIDE a field has a negative vertical gap of roughly its own height, so it failed the
+      // `verticalGap < -5` test and every two-column form - "Name:" to the left of the box, the
+      // commonest layout in older registration pages - produced no label at all.
+      //
+      // The new tiers start at 7000 and 8000, far above any score an above-label can reach
+      // (6099 at worst), so a label genuinely above a field always wins and nothing that
+      // already worked changes behaviour.
       const gapTo = (target, labelRect) => {
         const r = target.getBoundingClientRect();
         const verticalGap = r.top - labelRect.bottom;
         const horizontalOverlap = Math.min(r.right, labelRect.right) - Math.max(r.left, labelRect.left);
-        if (verticalGap < -5 || verticalGap > 60 || horizontalOverlap <= -50) return Infinity;
-        const horizontalOffset = Math.abs(labelRect.left - r.left);
-        return verticalGap * 100 + Math.min(horizontalOffset, 99);
+
+        // 1. ABOVE the field.
+        if (verticalGap >= -5 && verticalGap <= 60 && horizontalOverlap > -50) {
+          const horizontalOffset = Math.abs(labelRect.left - r.left);
+          return verticalGap * 100 + Math.min(horizontalOffset, 99);
+        }
+
+        // Both remaining placements need the two to be on the same visual row.
+        const sameRow =
+          Math.abs((labelRect.top + labelRect.bottom) / 2 - (r.top + r.bottom) / 2) <=
+          Math.max(r.height, 16) / 2 + 4;
+
+        // 2. LEFT of the field, on the same row. Capped at 220px so a label cannot claim a
+        // field on the far side of the page.
+        if (sameRow && labelRect.right <= r.left + 5) {
+          const distance = r.left - labelRect.right;
+          if (distance <= 220) return 7000 + Math.min(distance, 999);
+        }
+
+        // 3. INSIDE the field's own box - a floating label that has not risen yet, which is
+        // what most modern component libraries render before the field is focused.
+        if (sameRow && labelRect.left >= r.left - 5 && labelRect.right <= r.right + 5) {
+          return 8000 + Math.min(Math.abs(labelRect.left - r.left), 999);
+        }
+
+        return Infinity;
       };
 
       let best = null;
       let bestGap = Infinity;
+      const group = groupOf(node);
       for (const c of candidates) {
         const text = (c.textContent || '').trim();
         if (!text || text.length > 60) continue;
@@ -90,22 +160,39 @@ async function describeField(el) {
         const r = c.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) continue;
 
-        const gap = gapTo(node, r);
+        // Anything inside the field's own group outranks every geometric guess, by a margin
+        // no geometric score can reach.
+        const inGroup = Boolean(group && group.contains(c));
+        // Inside a group, distance alone is not enough: a block of explanatory text in the next
+        // column sits flush against the field's right edge, so its distance is zero and it beat
+        // the actual label ten pixels to the left. A label precedes its field - in reading order
+        // and therefore in the document - so anything that FOLLOWS the field is penalised. A
+        // penalty rather than a ban, since it must still win when it is the only candidate.
+        const follows = Boolean(
+          node.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING
+        );
+        const gap = inGroup
+          ? -100000 + Math.min(distanceTo(node, r), 999) + (follows ? 500 : 0)
+          : gapTo(node, r);
         if (gap === Infinity || gap >= bestGap) continue;
 
         // Only accept a label if THIS field is the closest field to it. Without this check the
         // association can shift by one whole field when a layout puts inputs and labels in an
         // order the geometry does not expect - and a shifted association is worse than none,
         // because it types the email into the surname box and submits that.
-        let ownedByAnother = false;
-        for (const other of inputs) {
-          if (other === node) continue;
-          if (gapTo(other, r) < gap) {
-            ownedByAnother = true;
-            break;
+        // Skipped inside a group: a group contains exactly one field by construction, so
+        // there is no other field that could own the label.
+        if (!inGroup) {
+          let ownedByAnother = false;
+          for (const other of inputs) {
+            if (other === node) continue;
+            if (gapTo(other, r) < gap) {
+              ownedByAnother = true;
+              break;
+            }
           }
+          if (ownedByAnother) continue;
         }
-        if (ownedByAnother) continue;
 
         bestGap = gap;
         best = text;
@@ -435,6 +522,95 @@ async function fillUnmatchedSelects(frame, identity, logger) {
     if (chosen) {
       logger.info(`Answered "${(description || 'a dropdown').trim().slice(0, 60)}" with "${chosen}".`);
       filled++;
+    }
+  }
+  return filled;
+}
+
+// Last line of defence: a REQUIRED field that nothing identified is still filled.
+//
+// The form tells us it is required, we can see it is empty, and we submit anyway - so the
+// provider rejects the whole registration over one box. INTU 2026Q4 lost all four attempts to a
+// required "Industry Affiliation" on event.on24.com; every other field on that form was filled
+// correctly.
+//
+// Guessing a value is safe here in a way that guessing a BUTTON never is. The worst case is a
+// nonsense answer to a marketing question on a throwaway registration; the alternative is a
+// certain failure. "Other" is the default because these fields are almost always a category -
+// affiliation, industry, how did you hear about us - where it is also the honest answer.
+//
+// Types that cannot take a word are skipped rather than filled with rubbish, and a password is
+// never guessed: a passcode gate is a real gate, and pretending to answer it would turn a clear
+// failure into a confusing one.
+const UNGUESSABLE_TYPES = ['password', 'number', 'date', 'datetime-local', 'time', 'month', 'week', 'url', 'file', 'color', 'range'];
+
+async function fillRequiredUnmatched(frame, identity, logger) {
+  const fields = await frame.$$('input:visible, textarea:visible').catch(() => []);
+  let filled = 0;
+
+  for (const el of fields) {
+    const type = ((await el.getAttribute('type').catch(() => '')) || 'text').toLowerCase();
+    if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'search'].includes(type)) continue;
+    if (UNGUESSABLE_TYPES.includes(type)) continue;
+    if (await el.isDisabled().catch(() => false)) continue;
+    if ((await el.isEditable().catch(() => true)) === false) continue;
+    if (await isOffscreen(el)) continue;
+    if (((await el.inputValue().catch(() => '')) || '').trim()) continue; // already answered
+
+    const description = await describeField(el);
+    if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
+    if (matchField(description)) continue; // the normal path owns this one
+    if (await isFurniture(el)) continue;
+
+    const required = await el
+      .evaluate((node) => {
+        if (node.required || node.getAttribute('aria-required') === 'true') return true;
+        if (/(^|[\s_-])required([\s_-]|$)/i.test(node.className || '')) return true;
+
+        // Most forms mark this with an asterisk rather than an attribute, so the field's own
+        // label and its own group are searched for one - and nothing wider.
+        //
+        // Climbing to any ancestor holding OTHER fields reads their asterisks as this one's. A
+        // flat form with no wrappers put every field's label under one parent, and an earlier
+        // version that allowed that marked an explicitly optional "Referred by (optional)" box
+        // as required and answered it.
+        let group = null;
+        let el = node.parentElement;
+        for (let depth = 0; el && depth < 6; depth++, el = el.parentElement) {
+          if (el.querySelectorAll('input:not([type=hidden]), select, textarea').length !== 1) break;
+          group = el;
+        }
+
+        const own = [];
+        if (group) own.push(group);
+        if (node.id) {
+          const explicit = document.querySelector(`label[for="${node.id}"]`);
+          if (explicit) own.push(explicit);
+        }
+        const wrapping = node.closest('label');
+        if (wrapping) own.push(wrapping);
+
+        return own.some((n) => (n.innerText || '').includes('*'));
+      })
+      .catch(() => false);
+    if (!required) continue;
+
+    // An email or phone box that reached here was not matched by wording, but its TYPE says
+    // what belongs in it, and a real address beats "Other".
+    const value =
+      type === 'email' ? identity.email : type === 'tel' ? identity.phone : identity.fallbackAnswer || 'Other';
+
+    const label = description.trim().slice(0, 60) || 'an unlabelled field';
+    const ok = await el
+      .fill(String(value))
+      .then(() => true)
+      .catch((err) => {
+        logger.warn(`Could not fill required field "${label}": ${err.message}`);
+        return false;
+      });
+    if (ok) {
+      filled++;
+      logger.info(`Filled required field "${label}" with "${value}" - no identity value matched it.`);
     }
   }
   return filled;
@@ -876,6 +1052,8 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
       filledCount += await fillUnmatchedSelects(frame, identity, logger);
       await checkRequiredConsent(frame, logger);
       await answerConsentRadios(frame, logger);
+      // Last, so it only ever sees what everything else declined to answer.
+      await fillRequiredUnmatched(frame, identity, logger);
       const outcome = await clickFirstMatchingButton(page, frame, logger, filledCount > 0, filledCount === 0);
       if (outcome.clicked && outcome.entryWorded && !REGISTRATION_BUTTON_PATTERN.test(outcome.clickedText)) {
         clearedEntryButtons.add(outcome.clickedText);

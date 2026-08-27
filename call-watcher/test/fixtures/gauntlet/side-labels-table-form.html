@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Investor Webcast Registration - Q3 2026 Results</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    Labels BESIDE the field rather than above it - the commonest layout in older registration
+    pages, and until now invisible to the matcher.
+
+    None of these fields can be identified from its attributes: the ids are database column
+    names. That leaves the geometric label guess, which measured only the vertical distance from
+    a label to the field BELOW it. A label sitting beside a field has a negative vertical gap of
+    roughly its own height, so it was rejected outright and every field on a form like this came
+    back unmatched.
+
+    The last field uses a floating label - drawn inside the input's own box until focus lifts it
+    out - which failed for the same reason and is the default in every modern component library.
+
+    The far-left cell is the guard: a label 400px away belongs to nothing, and must not be
+    claimed by the field on the other side of the page.
+  -->
+  <h1>Q3 2026 Results - Investor Webcast</h1>
+
+  <form id="reg">
+    <table>
+      <tr>
+        <td style="width:150px"><span>First Name:</span></td>
+        <td><input type="text" id="col_8801" name="col_8801" style="width:300px" data-expect="firstName"></td>
+        <td style="width:400px"><span>Sessions are recorded and made available afterwards.</span></td>
+      </tr>
+      <tr>
+        <td><span>Last Name:</span></td>
+        <td><input type="text" id="col_8802" name="col_8802" style="width:300px" data-expect="lastName"></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><span>Email Address:</span></td>
+        <td><input type="text" id="col_8803" name="col_8803" style="width:300px" data-expect="email"></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><span>Company:</span></td>
+        <td><input type="text" id="col_8804" name="col_8804" style="width:300px" data-expect="company"></td>
+        <td></td>
+      </tr>
+    </table>
+
+    <div style="position:relative;height:40px;width:300px;margin-top:12px">
+      <span style="position:absolute;left:8px;top:10px;color:#888">Phone number</span>
+      <input type="text" id="col_8805" name="col_8805"
+             style="position:absolute;left:0;top:6px;width:300px;height:28px" data-expect="phone">
+    </div>
+
+    <button type="submit" id="submit">Register</button>
+  </form>
+
+  <div id="console" style="display:none" data-incall>Webcast console</div>
+  <p id="error" style="display:none">All fields are required.</p>
+
+  <script>
+    document.getElementById('reg').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const ids = ['col_8801', 'col_8802', 'col_8803', 'col_8804'];
+      if (ids.some((id) => !document.getElementById(id).value.trim())) {
+        document.getElementById('error').style.display = 'block';
+        return;
+      }
+      document.getElementById('reg').style.display = 'none';
+      document.getElementById('console').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

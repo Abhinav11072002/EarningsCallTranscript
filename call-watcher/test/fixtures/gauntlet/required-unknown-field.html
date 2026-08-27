@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Intuit Fourth Quarter and Fiscal-Year 2026 Earnings</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    event.on24.com, reproduced from the live page. INTU 2026Q4 lost all four attempts here with
+    every other field filled correctly: "Industry Affiliation" is required, matches no identity
+    value, and was therefore left empty - so the provider rejected the whole registration over
+    one box.
+
+    Two different answers are needed:
+
+      Position            - a real identity value was simply missing. Added as jobTitle, which
+                            also fixes reg.lumiengage.com's required "Position" field.
+      Industry Affiliation - genuinely unknown, and nothing sensible can be derived from it. It
+                            gets the fallback answer, because a nonsense answer to a marketing
+                            question beats a certain failure.
+
+    The two guards are as important as the fills. The optional box must stay empty - guessing is
+    only justified when the form insists - and the passcode must never be guessed, because
+    inventing an answer to a real gate turns a clear failure into a confusing one.
+  -->
+  <h1>Intuit Fourth Quarter and Fiscal-Year 2026 Earnings</h1>
+
+  <form id="reg">
+    <label for="firstname">First Name *</label>
+    <input type="text" id="firstname" name="firstname" required data-expect="firstName">
+
+    <label for="lastname">Last Name *</label>
+    <input type="text" id="lastname" name="lastname" required data-expect="lastName">
+
+    <label for="company">Company *</label>
+    <input type="text" id="company" name="company" required data-expect="company">
+
+    <label for="email">Email *</label>
+    <input type="email" id="email" name="email" required data-expect="email">
+
+    <label for="jobrole">Position *</label>
+    <input type="text" id="jobrole" name="jobrole" required data-expect="jobTitle">
+
+    <label for="std1">Industry Affiliation *</label>
+    <input type="text" id="std1" name="std1" required data-expect="fallbackAnswer">
+
+    <label for="std2">Referred by (optional)</label>
+    <input type="text" id="std2" name="std2" data-expect="none">
+
+    <button type="submit" id="submit">Register</button>
+  </form>
+
+  <div id="console" style="display:none" data-incall>Webcast console</div>
+  <p id="error" style="display:none">Please complete all required fields.</p>
+
+  <script>
+    document.getElementById('reg').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const ids = ['firstname', 'lastname', 'company', 'email', 'jobrole', 'std1'];
+      if (ids.some((id) => !document.getElementById(id).value.trim())) {
+        document.getElementById('error').style.display = 'block';
+        return;
+      }
+      document.getElementById('reg').style.display = 'none';
+      document.getElementById('console').style.display = 'block';
+    });
+  </script>
+</body>
+</html>
