@@ -8,6 +8,7 @@ const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
 const { shouldSkipAsLate, shouldReacquireNow } = require('./dispatchRules');
+const { rewriteToWebcastUrl, telephoneOnlyReason } = require('./providerRules');
 const { strategyForAttempt } = require('./retryStrategy');
 const { ensurePlaying, installAudioProbe } = require('./playback');
 const { Mutex, withDeadline, runPreparedBatch } = require('./concurrency');
@@ -168,6 +169,23 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
                 `(expected it to start with "${truncatedPrefix}", got "${dialinLink}") - probably the wrong row`
             );
           }
+        }
+
+        // What we already know about this provider, applied before a tab is opened.
+        const phoneOnly = telephoneOnlyReason(dialinLink);
+        if (phoneOnly) {
+          // Terminal rather than a retry: four attempts at a page that can never carry audio
+          // cost nothing but the pipeline lock, which other calls in the window queue behind.
+          throw new Error(`Refusing to record: ${phoneOnly} (${dialinLink})`);
+        }
+
+        const rewritten = rewriteToWebcastUrl(dialinLink);
+        if (rewritten.changed) {
+          logger.info(
+            `${row.symbol} ${row.fiscalPeriod}: using the webcast URL for this event instead - ` +
+              `${rewritten.why}. ${dialinLink} -> ${rewritten.url}`
+          );
+          dialinLink = rewritten.url;
         }
 
         // Hints let the resolver prefer THIS call's link when a page lists several quarters -

@@ -15,6 +15,7 @@ const path = require('path');
 const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('../../src/tableWatcher');
 const { StateStore } = require('../../src/stateStore');
 const { shouldSkipAsLate, shouldReacquireNow } = require('../../src/dispatchRules');
+const { rewriteToWebcastUrl, telephoneOnlyReason } = require('../../src/providerRules');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow, buildShortcutCommand } = require('../../src/extensionTrigger');
@@ -1727,6 +1728,53 @@ check('dispatchRules: the start threshold is configurable without changing the s
   // A provider that opens its line five minutes early could reasonably restart sooner.
   assert.strictEqual(shouldReacquireNow({ minsLeft: 4, startsWithinMinutes: 5 }).reacquire, true);
   assert.strictEqual(shouldReacquireNow({ minsLeft: 6, startsWithinMinutes: 5 }).reacquire, false);
+});
+
+check('providerRules: a q4inc analyst link becomes the attendee webcast for the same event', () => {
+  // Seven calls over three days were refused with "the page has no audio or video player", and
+  // the refusal was right: /analyst/ registers for the telephone Q&A line and asks for "the
+  // phone number you will call in from". The listen-only webcast is the same id under
+  // /attendee/, which offers "Continue without a Q4 account" - a path the filler already
+  // handles. Verified against the live page.
+  const out = rewriteToWebcastUrl('https://events.q4inc.com/analyst/883220744?pwd=7dXQ6ZuG');
+  assert.strictEqual(out.changed, true);
+  assert.strictEqual(out.url, 'https://events.q4inc.com/attendee/883220744?pwd=7dXQ6ZuG');
+  assert.match(out.why, /telephone/i);
+});
+
+check('providerRules: an attendee link is already right and is left alone', () => {
+  // Rewriting twice would be harmless here, but a rule that fires on its own output is one
+  // provider change away from a loop.
+  const url = 'https://events.q4inc.com/attendee/883220744?pwd=7dXQ6ZuG';
+  assert.strictEqual(rewriteToWebcastUrl(url).changed, false);
+  assert.strictEqual(rewriteToWebcastUrl(url).url, url);
+});
+
+check('providerRules: an unknown provider passes through untouched', () => {
+  const url = 'https://edge.media-server.com/mmc/p/9ygc48hy/';
+  const out = rewriteToWebcastUrl(url);
+  assert.strictEqual(out.changed, false);
+  assert.strictEqual(out.url, url);
+});
+
+check('providerRules: Diamond Pass is named as telephone-only rather than retried', () => {
+  // Four attempts on a page that can never carry audio cost the pipeline lock, and other calls
+  // in the same 15-minute window queue behind it.
+  for (const url of [
+    'https://s1.c-conf.com/diamondpass/10056759-hu76t5.html',
+    'https://dpregister.com/DiamondPassRegistration/register?confirmationNumber=10211387',
+  ]) {
+    const reason = telephoneOnlyReason(url);
+    assert.ok(reason, `${url} should be recognised as telephone-only`);
+    assert.match(reason, /dial-in|no browser stream/i);
+  }
+});
+
+check('providerRules: a normal webcast link is not mistaken for telephone-only', () => {
+  // The pattern must not fire on choruscall's actual WEBCAST host, which does carry audio -
+  // ALWN 2026Q2 was recorded through it.
+  assert.strictEqual(telephoneOnlyReason('https://webcast.choruscall.com/webcast.html?webcastid=R1WupLoR'), null);
+  assert.strictEqual(telephoneOnlyReason('https://event.choruscall.com/mediaframe/webcast.html?webcastid=x'), null);
 });
 
 // ---------------------------------------------------------------- report
