@@ -33,65 +33,50 @@ async function findDialinLinkHandle(page, symbol, expectedText) {
 
       const all = Array.from(document.querySelectorAll('body *:not(span)')).filter(isVisible);
 
-      const dialinHeader = all.find((el) => textOf(el) === 'Dialin Link');
-      if (!dialinHeader) return null;
-      const dialinX = dialinHeader.getBoundingClientRect().left;
+      // Every occurrence, not the first. Matches tableWatcher.js's own trailing-"^" stripping so
+      // the same rows are found here as there.
+      const symbolEls = all.filter((el) => textOf(el).replace(/\^$/, '') === targetSymbol);
+      if (!symbolEls.length) return null;
+      const rowTops = symbolEls.map((el) => el.getBoundingClientRect().top);
+      const onOneOfOurRows = (el) => {
+        const top = el.getBoundingClientRect().top;
+        return rowTops.some((rowTop) => Math.abs(rowTop - top) <= tol);
+      };
 
-      // The smallest element sitting in the Dialin Link column on a given row - the cell
-      // itself rather than the row or the table that also happen to start there.
-      const cellAt = (rowTop) => {
-        const candidates = all.filter((el) => {
-          const r = el.getBoundingClientRect();
-          return Math.abs(r.top - rowTop) <= tol && Math.abs(r.left - dialinX) <= tol;
-        });
-        if (!candidates.length) return null;
-        candidates.sort((a, b) => {
+      const smallestFirst = (els) =>
+        els.slice().sort((a, b) => {
           const ra = a.getBoundingClientRect();
           const rb = b.getBoundingClientRect();
           return ra.width * ra.height - rb.width * rb.height;
         });
-        return candidates[0];
-      };
 
-      // Every occurrence, not the first. Matches tableWatcher.js's own trailing-"^" stripping
-      // so the same rows are found here as there.
-      const symbolEls = all.filter((el) => textOf(el).replace(/\^$/, '') === targetSymbol);
-      if (!symbolEls.length) return null;
-
-      const cells = symbolEls
-        .map((el) => cellAt(el.getBoundingClientRect().top))
-        .filter(Boolean);
-      if (!cells.length) return null;
-
+      // TEXT FIRST, geometry second, and the order is the fix.
+      //
+      // The column position comes from the first "Dialin Link" header on the page and does not
+      // hold everywhere: the portal renders more than one section, so rows further down sit at a
+      // different x and the column search finds nothing for them. When that happened this gave
+      // up on the spot - nineteen of fifty links came back unresolvable on a table with history
+      // in it - without ever trying the one piece of evidence that does not depend on layout.
+      //
+      // The truncated text alone is not enough either: every choruscall link shortens to the
+      // same string, and 36 cells on that page carried it. So the text finds the candidates and
+      // the row decides which one is ours.
       if (expected) {
-        const exact = cells.find((cell) => textOf(cell) === expected);
-        if (exact) return exact;
-
-        // The column position is taken from the FIRST "Dialin Link" header on the page, and the
-        // portal renders more than one table. Rows in a later section sit at a different x, so
-        // cellAt() finds nothing for them - which is why nine GWRE rows produced one usable
-        // cell, and that one held "-".
-        //
-        // The text itself does not care about any of that. Match on it directly, then confirm
-        // the row really is this symbol's rather than trusting a lone string.
-        const byText = all.filter((el) => textOf(el) === expected);
-        if (byText.length) {
-          byText.sort((a, b) => {
-            const ra = a.getBoundingClientRect();
-            const rb = b.getBoundingClientRect();
-            return ra.width * ra.height - rb.width * rb.height;
-          });
-          for (const cell of byText) {
-            const rowTop = cell.getBoundingClientRect().top;
-            const sameRow = symbolEls.some((el) => Math.abs(el.getBoundingClientRect().top - rowTop) <= tol);
-            if (sameRow) return cell;
-          }
-        }
+        const byText = all.filter((el) => textOf(el) === expected && onOneOfOurRows(el));
+        if (byText.length) return smallestFirst(byText)[0];
       }
 
-      // No text to match on, or the table changed under us. A cell holding "-" is never the
-      // right answer - it is a row with no link at all - so it is skipped even in the fallback.
-      return cells.find((cell) => textOf(cell) && textOf(cell) !== '-') || null;
+      // Fallback: the Dialin Link column, on one of this symbol's rows. A cell holding "-" is
+      // never the answer - that is a row with no link at all.
+      const dialinHeader = all.find((el) => textOf(el) === 'Dialin Link');
+      if (!dialinHeader) return null;
+      const dialinX = dialinHeader.getBoundingClientRect().left;
+
+      const inColumn = all.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return Math.abs(r.left - dialinX) <= tol && onOneOfOurRows(el);
+      });
+      return smallestFirst(inColumn).find((cell) => textOf(cell) && textOf(cell) !== '-') || null;
     },
     { targetSymbol: symbol, tol: POSITION_TOLERANCE_PX, expected: expectedText || null }
   );

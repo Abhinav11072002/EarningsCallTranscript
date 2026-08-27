@@ -205,7 +205,11 @@ async function rehearse(context, row, config) {
   // this stays strictly serial, exactly as the watcher does it.
   for (const row of rows) {
     if (/(\.{3}|…)/.test(row.dialinLink)) {
-      const resolved = await resolveDialinLinkByClick(context, portalPage, row.symbol, logger).catch(() => null);
+      // The truncated text identifies WHICH row to click, exactly as src/index.js does it.
+      // Without it the resolver takes the first row carrying that symbol, and a table with
+      // history in it holds many - which is why sixteen of fifty came back unresolved.
+      const resolved = await resolveDialinLinkByClick(context, portalPage, row.symbol, logger, row.dialinLink)
+        .catch(() => null);
       if (resolved) row.dialinLink = resolved;
     }
   }

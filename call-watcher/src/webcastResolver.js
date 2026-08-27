@@ -46,6 +46,20 @@ const ASSET_PATH_PATTERN = /\.(pdf|zip|xlsx?|docx?|pptx?|csv|jpe?g|png|gif|svg|m
 // separate from scoring below because these should be actively avoided, not merely ranked low.
 const STALE_LINK_PATTERN = /archive|replay|transcript|presentation|slides?\b|playback|on-?demand/i;
 
+// The subset that is never worth following at ANY score. STALE_LINK_PATTERN only subtracts
+// points, so when a replay was the sole candidate it still won - ECOR.L 2026Q2 followed a link
+// reading "WEBCAST REPLAY" and landed on the March 2026 full-year results, an event five months
+// past, and then filled in its registration form.
+//
+// A recording of the wrong call is the worst outcome this project has: it produces a transcript
+// that looks entirely successful and is about something else. Nothing downstream can tell.
+//
+// Deliberately narrower than STALE_LINK_PATTERN. "Presentation" and "slides" describe the wrong
+// KIND of resource and stay as penalties, because plenty of live calls are titled "Results
+// Presentation" and refusing those outright would lose real calls. These four words only ever
+// mean the event has already happened.
+const NEVER_FOLLOW_PATTERN = /\breplays?\b|\barchived?\b|on-?demand|\bplaybacks?\b/i;
+
 // A provider's own site is full of links to itself, and only one of them is the webcast. ZH
 // 2026Q2 resolved to https://www.notified.com/privacy and failed all four attempts against a
 // privacy policy: notified.com is a known provider, so a footer link to it looked exactly like
@@ -127,6 +141,10 @@ async function findKnownProviderLink(page, config, hints) {
     if (isAssetUrl(absolute)) continue;
     if (isNonWebcastPath(absolute)) continue;
     const text = ((await a.innerText().catch(() => '')) || '').trim();
+    // Refused outright, not merely marked down. A replay is a recording of a call that has
+    // already happened, and following one produces a transcript of the wrong event that looks
+    // completely successful afterwards. See NEVER_FOLLOW_PATTERN.
+    if (NEVER_FOLLOW_PATTERN.test(`${text} ${absolute}`)) continue;
     // A known host outranks a lucky-looking path, so precision still wins where both apply.
     const bonus = knownHost ? 2 : 0;
     candidates.push({ absolute, index, score: scoreCandidate(text, absolute, hints) + bonus });
@@ -194,6 +212,13 @@ async function tryResolveOnCurrentPage(page, config, logger, hints) {
   for (const el of candidates) {
     const text = ((await el.innerText().catch(() => '')) || '').trim();
     if (text.length > ctaTextLimit || !ctaPattern.test(text)) continue;
+    // The same refusal the href scan makes. This path matches on WORDING alone, which is
+    // exactly where "WEBCAST REPLAY" scores well - it followed one on ECOR.L 2026Q2 and
+    // registered for the March 2026 full-year results, an event five months past.
+    if (NEVER_FOLLOW_PATTERN.test(text)) {
+      logger.info(`Ignoring "${text}" - it is a recording of a call that has already happened.`);
+      continue;
+    }
 
     logger.info(`Found candidate webcast link via text match: "${text}"`);
     const href = await el.getAttribute('href').catch(() => null);

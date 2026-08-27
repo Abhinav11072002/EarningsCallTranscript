@@ -264,7 +264,14 @@ const FURNITURE_SELECTOR = 'nav, header, footer, [role=navigation], [role=search
 // Inputs that look identity-ish but never belong to a gate. Excluded everywhere, regardless of
 // position, because typing into them can trigger navigation or an autocomplete overlay that
 // covers the player - and subscribing the dummy identity to a mailing list is a real side effect.
-const IRRELEVANT_FIELD_PATTERN = /newsletter|subscrib|search|promo|coupon|discount|voucher/i;
+//
+// The question box belongs on this list above all. It sits INSIDE the call, not on the gate -
+// "Enter your questions here" on edge.media-server.com's player - and the required-field
+// fallback dutifully typed "Other" into it on RZLV 2026Q2. Submitting a made-up question to a
+// live earnings call is not a cosmetic mistake; it is visible to the company and to everyone
+// else attending, and no recording depends on it.
+const IRRELEVANT_FIELD_PATTERN =
+  /newsletter|subscrib|search|promo|coupon|discount|voucher|question|comment|message|feedback|enquir|inquir/i;
 
 // Buttons that must never be clicked while hunting for a registration CTA.
 // "Create Account" is an upsell, never a way in. q4inc shows it on the page AFTER a successful
@@ -354,6 +361,14 @@ const MODE_SWITCH_PATTERN =
   /already\s+regist|already\s+have\s+an?\s+account|returning\s+(?:attendee|user|visitor)|(?:sign|log)\s*in\s+instead|switch\s+to\s+(?:login|sign)/i;
 
 const CTA_BUTTON_PATTERN = /register|submit|enter|join|continue|watch now|listen now|access|attend/i;
+
+// A form split across steps advances with a button that says none of the above. brrmedia asks
+// for an email, a terms checkbox, and then "NEXT" - which matched nothing, so the email was
+// typed into the same first step three times and the call was lost on a two-field form.
+//
+// Word-anchored and only ever accepted once a field has actually been filled, because "Next" is
+// also what a carousel arrow says. If nothing was typed, there is no step to advance.
+const STEP_ADVANCE_PATTERN = /^\s*(?:next|next\s+step|proceed|go\s+on)\s*(?:>|»|→|\u203a)?\s*$/i;
 const REGISTRATION_BUTTON_PATTERN = /register|registration|sign\s*in|log\s*in|account|continue\s+registration|continue\s+without|guest|join\s+(the\s+)?(webinar|conference|event)|attend\s+(the\s+)?event/i;
 
 // Fields worth filling, split by how confident we are that they belong to the gate. Anything
@@ -472,14 +487,19 @@ async function fillVisibleFields(frame, identity, logger, allowFurnitureFallback
   for (const { el, tag, description, key } of targets) {
     try {
       if (tag === 'select') {
-        // Bounded, and deliberately short. selectOption WAITS for a matching option to appear,
-        // so asking a "Preferred contact time" dropdown for "nocos" blocks for Playwright's
-        // 30-second default - and the fallback below made it 60. Measured exactly that, on one
-        // dropdown, inside the pipeline lock. The options of a rendered select are already
-        // there or they are not; there is nothing to wait for.
-        await el
-          .selectOption({ label: identity[key] }, { timeout: SELECT_TIMEOUT_MS })
-          .catch(() => el.selectOption(identity[key], { timeout: SELECT_TIMEOUT_MS }).catch(() => {}));
+        // Chosen in the page rather than through selectOption, which demands an exact label or
+        // value and WAITS for one to appear - so asking a "Preferred contact time" dropdown for
+        // "nocos" blocked for Playwright's 30-second default, inside the pipeline lock, for
+        // nothing. The options of a rendered select are already there or they are not.
+        const picked = await chooseSelectOption(el, identity[key], OTHER_OPTION_PATTERN.source);
+        if (picked) {
+          logger.info(`Answered "${(description || key).trim().slice(0, 50)}" with "${picked}".`);
+          filledCount++;
+          filledKeys.push(key);
+        } else {
+          logger.warn(`"${(description || key).trim().slice(0, 50)}" offers no option matching "${identity[key]}".`);
+        }
+        continue;
       } else {
         await el.fill(String(identity[key]));
       }
@@ -542,6 +562,71 @@ async function fillVisibleFields(frame, identity, logger, allowFurnitureFallback
   if (filledKeys.length) logger.info(`Filled ${filledKeys.length} field(s): ${filledKeys.join(', ')}.`);
   else if (targets.length) logger.info(`Found ${targets.length} fillable field(s) but none retained a value.`);
   return filledCount;
+}
+
+
+// Choosing an option from a <select> when the wording does not match ours exactly.
+//
+// selectOption() demands an exact label or value, and real dropdowns rarely oblige. Two on one
+// RZLV 2026Q2 form, both required, both left unset, so the Submit button stayed disabled and
+// all four attempts died on a timeout clicking it:
+//
+//   Country     we hold "USA"; the list says "United States"
+//   Occupation  matched jobTitle, so we asked for "Analyst"; the list offers no such thing
+//
+// Four passes, narrowest first, and the last one is what makes a required dropdown answerable
+// at all: if nothing we hold fits, take "Other". That is the same choice fillUnmatchedSelects
+// makes for a dropdown we never understood, and the reasoning is identical - it is true, it is
+// offered by nearly every such list, and it asserts nothing specific.
+const COUNTRY_ALIASES = {
+  usa: ['united states', 'united states of america', 'us', 'u s a', 'america'],
+  us: ['united states', 'united states of america', 'usa'],
+  uk: ['united kingdom', 'great britain', 'england'],
+};
+
+async function chooseSelectOption(el, wanted, otherSource) {
+  return el
+    .evaluate(
+      (node, { want, other }) => {
+        const norm = (value) =>
+          String(value || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+
+        const aliases = {
+          usa: ['united states', 'united states of america', 'us', 'u s a', 'america'],
+          us: ['united states', 'united states of america', 'usa'],
+          uk: ['united kingdom', 'great britain', 'england'],
+        };
+
+        const target = norm(want);
+        const wants = new Set([target, ...(aliases[target] || []).map(norm)].filter(Boolean));
+        // A placeholder carries an empty value on nearly every form; never "choose" one.
+        const options = Array.from(node.options).filter((option) => option.value !== '');
+        if (!options.length) return null;
+
+        const pick =
+          // 1. the text or the value, exactly
+          options.find((option) => wants.has(norm(option.textContent)) || wants.has(norm(option.value))) ||
+          // 2. one contains the other as a whole word run - "United States" against "United
+          //    States of America", not "Ireland" against "Iceland"
+          options.find((option) => {
+            const text = norm(option.textContent);
+            return [...wants].some((w) => w && (text.startsWith(w + ' ') || w.startsWith(text + ' ')));
+          }) ||
+          // 3. nothing we hold fits: "Other"
+          options.find((option) => new RegExp(other, 'i').test(option.textContent || ''));
+
+        if (!pick) return null;
+        node.value = pick.value;
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+        node.dispatchEvent(new Event('change', { bubbles: true }));
+        return (pick.textContent || '').trim();
+      },
+      { want: wanted, other: otherSource }
+    )
+    .catch(() => null);
 }
 
 // Dropdowns a registration form requires but that mean nothing to us - "Industry Affiliation",
@@ -1112,14 +1197,26 @@ async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback
           ? 4
           : entryWorded
             ? 3
-            : type === 'submit'
-              ? 2
-              : 0;
+            : // Below every worded CTA and above a bare submit: a step-advance is the right move
+              // only when nothing more explicit is on offer.
+              allowSubmitFallback && STEP_ADVANCE_PATTERN.test(text)
+              ? 2.5
+              : type === 'submit'
+                ? 2
+                : 0;
     // A link only qualifies on explicit entry wording. Without this, "Contact Investor
     // Relations" or a footer link would become a candidate on almost every page.
     if (isPlainAnchor && !entryWorded) continue;
     if (!score || (registrationOnly && !entryWorded)) continue;
-    if (!CTA_BUTTON_PATTERN.test(text) && !entryWorded && !(allowSubmitFallback && type === 'submit')) continue;
+    const stepAdvance = allowSubmitFallback && STEP_ADVANCE_PATTERN.test(text);
+    if (
+      !CTA_BUTTON_PATTERN.test(text) &&
+      !entryWorded &&
+      !stepAdvance &&
+      !(allowSubmitFallback && type === 'submit')
+    ) {
+      continue;
+    }
     candidates.push({ btn, text, score, entryWorded, isSubmit: type === 'submit' });
   }
   // On a tie, a real submit button beats a link-styled control with the same wording. The two
