@@ -167,10 +167,15 @@ for (const [label, attempts] of byCall) {
   if (started) {
     recorded.push({ label, entry: started, attempts: attempts.length });
     // The dangerous shape: counted as success, produced nothing.
-    if (started.audioPlaying === false) {
+    //
+    // audioAudible is the one to judge on where it exists - a muted player and a suspended
+    // WebAudio context are both "playing" while the tab makes no sound. Days recorded before
+    // that field existed only have audioPlaying, so it is the fallback rather than the test.
+    const silent = started.audioAudible === false || (started.audioAudible == null && started.audioPlaying === false);
+    if (silent) {
       atRisk.push({
         label,
-        why: 'no audio was playing when the capture began',
+        why: started.audioDetail ? `no audio when the capture began (${started.audioDetail})` : 'no audio was playing when the capture began',
         title: started.pageTitle,
         // Negative secondsLate means the call had not started yet, which explains silence.
         early: typeof started.secondsLateVsScheduled === 'number' ? Math.round(-started.secondsLateVsScheduled / 60) : null,

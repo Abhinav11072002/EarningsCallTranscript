@@ -9,7 +9,7 @@ const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
 const { shouldSkipAsLate, shouldReacquireNow } = require('./dispatchRules');
 const { strategyForAttempt } = require('./retryStrategy');
-const { ensurePlaying } = require('./playback');
+const { ensurePlaying, installAudioProbe } = require('./playback');
 const { Mutex, withDeadline, runPreparedBatch } = require('./concurrency');
 const { triggerExtension, getActiveStreams, streamMatchesRow, splitFiscalPeriod } = require('./extensionTrigger');
 const { connectToChrome, getOrOpenPortalPage } = require('./browserConnect');
@@ -207,7 +207,9 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
         // which the poll loop then reads as the stream having died, and reacquires, and starts
         // the whole cycle again.
         playback = await ensurePlaying(page, logger);
-        if (!playback.playing) {
+        // Audible, not merely playing: a muted player and a suspended WebAudio context both
+        // report as playing while the capture records silence.
+        if (!playback.audible) {
           logger.warn(
             `Recording ${row.symbol} ${row.fiscalPeriod} with no audio yet (${playback.action}). ` +
               'If the call has not started this is normal; if it persists the capture will be silent.'
@@ -280,6 +282,10 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
       // Whether audio was actually running when the capture began. A started-but-silent call
       // is the one shape that looks identical to success in every other field.
       audioPlaying: prepared.playback ? prepared.playback.playing : null,
+      // The one that matters. Kept separate from audioPlaying so ledger days written
+      // before this existed are still readable rather than retrospectively wrong.
+      audioAudible: prepared.playback ? prepared.playback.audible : null,
+      audioDetail: prepared.playback ? prepared.playback.action : null,
       // Negative minsLeft means the call had already begun when we dispatched it.
       secondsLateVsScheduled: minsLeftAtDispatch === undefined ? null : Math.round(-minsLeftAtDispatch * 60),
       attempts: store.get(key)?.attempts ?? null,
@@ -404,6 +410,11 @@ async function main() {
     const connection = await connectToChrome(config.cdpUrl);
     browser = connection.browser;
     context = connection.context;
+    // On the context rather than on each call tab, and before any page is opened: it has to
+    // wrap the AudioContext constructor before a page's own scripts reach it, and a tab the
+    // site opens for itself (an entry link that opens the call in a popup) has already
+    // navigated by the time we adopt it. Re-applied on every reconnect. See playback.js.
+    await installAudioProbe(context);
     portalPage = await getOrOpenPortalPage(context, config.portalUrl);
   };
   while (true) {

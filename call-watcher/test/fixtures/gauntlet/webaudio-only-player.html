@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Beta Industries Q3 2026 Earnings Call - Live</title>
+  <meta name="expect-joined" content="true">
+  <meta name="expect-audible" content="true">
+</head>
+<body>
+  <!--
+    Reproduces TD.TO 2026Q3 on meetview.com.
+
+    There is no <audio> or <video> anywhere on this page - the audio path is WebAudio, and the
+    player is a div. So mediaState() has nothing to inspect and reported "no media element to
+    start", which read as "the call has not begun yet" and was ignored.
+
+    The context is created from a timer, not from a click, exactly as meetview creates its own
+    from a websocket message. Chrome therefore creates it suspended and - this is the part that
+    catches people out - never resumes it by itself. The page has to ask, and this page, like
+    meetview, never does. Console shows "The AudioContext was not allowed to start" and the tab
+    is silent for the whole call.
+
+    A gesture alone does not fix it either. Something has to call resume() after the gesture,
+    which is why playback.js wraps the constructor before page scripts run.
+  -->
+  <h1>Beta Industries Third Quarter 2026 Earnings Call</h1>
+  <div data-incall>Connected. Audio is streaming.</div>
+  <div id="player" style="width:640px;height:360px;background:#111;color:#fff">
+    <span id="status">starting audio...</span>
+  </div>
+
+  <script>
+    // No user gesture involved, which is the whole point of the fixture.
+    setTimeout(() => {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctor();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.05;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+
+      const show = () => {
+        document.body.setAttribute('data-audio-state', ctx.state);
+        document.getElementById('status').textContent = 'audio ' + ctx.state;
+      };
+      ctx.onstatechange = show;
+      show();
+
+      // What meetview does: asks once, from a non-gesture path, and is refused.
+      ctx.resume().catch(() => {});
+    }, 50);
+  </script>
+</body>
+</html>

@@ -4,6 +4,7 @@
 //
 // Fixtures are self-describing (see test/fixtures/gauntlet/*.html):
 //   <meta name="expect-joined">  the run should end inside the call
+//   <meta name="expect-audible"> ensurePlaying must leave the page actually making sound
 //   <meta name="expect-refused"> the relevance guard should refuse to record the page
 //   <meta name="expect-pending"> the form filler should report the gate as still blocking
 //   data-forbidden="true"        clicking this element is a FAILURE, not a near miss
@@ -21,6 +22,7 @@ const path = require('path');
 const { chromium } = require('playwright-core');
 const { advanceJoinFlow, describeJoinBlocker } = require('../../src/joinFlow');
 const { fillRegistrationForm } = require('../../src/formFiller');
+const { ensurePlaying, installAudioProbe } = require('../../src/playback');
 const { loadConfig } = require('../../src/loadConfig');
 
 const config = loadConfig();
@@ -63,6 +65,7 @@ async function readExpectations(page) {
     };
     return {
       joined: meta('expect-joined'),
+      audible: meta('expect-audible'),
       refused: meta('expect-refused'),
       pending: meta('expect-pending'),
     };
@@ -131,6 +134,8 @@ const rows = [];
   const context = browser.contexts()[0];
   let page = await context.newPage();
   page.on('dialog', (d) => d.dismiss().catch(() => {}));
+  // Same as production: the AudioContext wrapper goes on the context before anything navigates.
+  await installAudioProbe(context);
 
   // Records forbidden clicks in every document, including ones created by later navigations
   // and inside iframes - a click that navigates away would otherwise erase its own evidence.
@@ -160,6 +165,7 @@ const rows = [];
       const started = Date.now();
       let crash = null;
       let pending = false;
+      let playback = null;
       try {
         // Exactly the sequence src/index.js runs for a real call.
         // Reassigned exactly as src/index.js does: an entry link may open the call in a new
@@ -171,6 +177,9 @@ const rows = [];
         if (reg.page) page = reg.page;
         pending = Boolean(reg.pending);
         page = await advanceJoinFlow(page, logger);
+        // Joining and hearing are not the same thing, and this is the step that tells them
+        // apart - a muted player and a suspended AudioContext both look joined.
+        playback = await ensurePlaying(page, logger);
       } catch (err) {
         crash = err.message;
       }
@@ -190,11 +199,24 @@ const rows = [];
         problems.push(`refused=${Boolean(blocker)}, expected ${expected.refused}${blocker ? ` (${blocker})` : ''}`);
       }
       if (expected.pending !== pending) problems.push(`pending=${pending}, expected ${expected.pending}`);
+      // Only asserted where a fixture opts in. Most fixtures are registration pages with no
+      // audio at all, and demanding sound from those would be meaningless.
+      if (expected.audible && !(playback && playback.audible)) {
+        problems.push(`audible=false, expected true (${playback ? playback.action : 'ensurePlaying never ran'})`);
+      }
       // Everything here runs under the pipeline lock in production, so a slow fixture is a
       // real finding: it delays every later call in the same 15-minute window.
       if (Number(elapsed) > 20) problems.push(`took ${elapsed}s under the pipeline lock`);
 
-      rows.push({ name, elapsed, joined, blocker: Boolean(blocker), pending, problems });
+      rows.push({
+        name,
+        elapsed,
+        joined,
+        blocker: Boolean(blocker),
+        pending,
+        audible: Boolean(playback && playback.audible),
+        problems,
+      });
       console.log(`${problems.length ? 'FAIL' : 'PASS'} ${name.padEnd(28)} ${elapsed}s`);
       for (const p of problems) console.log(`       ${p}`);
     }
@@ -206,7 +228,9 @@ const rows = [];
 
   const failed = rows.filter((r) => r.problems.length);
   console.log('\n' + '-'.repeat(78));
-  console.log('fixture'.padEnd(30) + 'time'.padEnd(8) + 'joined'.padEnd(9) + 'refused'.padEnd(10) + 'pending');
+  console.log(
+    'fixture'.padEnd(30) + 'time'.padEnd(8) + 'joined'.padEnd(9) + 'refused'.padEnd(10) + 'pending'.padEnd(10) + 'audible'
+  );
   console.log('-'.repeat(78));
   for (const r of rows) {
     console.log(
@@ -214,7 +238,8 @@ const rows = [];
         `${r.elapsed}s`.padEnd(8) +
         String(r.joined).padEnd(9) +
         String(r.blocker).padEnd(10) +
-        String(r.pending)
+        String(r.pending).padEnd(10) +
+        String(r.audible)
     );
   }
   console.log('-'.repeat(78));

@@ -123,6 +123,32 @@ before the call began. Now a stopped stream more than `reacquireWithinMinutesOfS
 the scheduled start is simply waited out - there is no audio yet to miss - and reacquiring
 resumes the moment the call is under way.
 
+**A joined call is not a recorded call.** Three ways a tab that looks perfect records silence,
+all three now handled by `playback.js`:
+
+| What the tab looks like | Why it is silent | What happens now |
+| --- | --- | --- |
+| Player sits on a poster frame behind a Start button | Nothing ever pressed it | The control is found and pressed |
+| `<video autoplay muted>` - `paused` is false, `readyState` good | Muted autoplay is the only autoplay Chrome permits, and nobody unmuted it | A gesture is delivered, then it is unmuted |
+| No `<audio>`/`<video>` at all; audio runs through WebAudio | Chrome creates an `AudioContext` suspended when there has been no user gesture and never resumes it by itself; a page that starts its audio from a websocket message never asks | The constructor is wrapped before page scripts run, a gesture is delivered to the owning frame, and the context is resumed |
+
+The last one cost TD.TO 2026Q3 and is invisible from the outside - the console said
+`The AudioContext was not allowed to start`, and every other field on the capture looked
+healthy. `playing` and `audible` are tracked separately for this reason: `playing` is what the
+old check tested, and it is exactly the test both of the bottom two rows pass while making no
+sound. The ledger records `audioAudible`, and `npm run analyze` judges CAPTURES AT RISK on it.
+
+Gestures are delivered through a transparent full-viewport overlay that takes the click, so no
+site control is ever touched - clicking a bare coordinate is the same class of risk that caused
+most of the regressions in this project. Activation does not propagate from a parent frame into
+an iframe, so the overlay goes into the frame that needs it.
+
+The `AudioContext` wrapper is installed on the browser **context**, not on each call tab: a tab
+the site opens for itself has already navigated by the time it is adopted, and an init script
+added then is too late to wrap the constructor. It is therefore present on every page in the
+watcher's Chrome profile - which is a dedicated profile, and the wrapper is a transparent
+`Proxy` that does nothing but retry `resume()` on a gesture.
+
 **Unbounded growth is bounded.** Dedupe records are pruned past `stateRecordTtlDays`; the
 unparseable-row warning set is cleared if it grows large (it is keyed partly on the live
 countdown text, so a row whose text ticks would otherwise add an entry every poll); logs are
