@@ -142,6 +142,16 @@ async function rehearse(context, row, config) {
 
     // In fill mode the gate is the headline: a form still standing after a real attempt is the
     // failure that costs calls, and it outranks anything the read-only checks noticed.
+    // A row the portal has not scheduled can never be dispatched: index.js needs a countdown to
+    // decide the 15-minute window, and without one the row is skipped. ECOR.L and ECOR.TO carry
+    // "2026Q2" and no date, so testing them at all was measuring something production never
+    // does - and reporting the result as a failure was worse than not testing them.
+    if (minutesUntilCall(row) === null) {
+      out.verdict = 'NO SCHEDULE';
+      out.detail = `the portal gives no date or countdown (${JSON.stringify(String(row.transcriptionTimeText).slice(0, 30))})`;
+      return out;
+    }
+
     if (fillMode && out.pending) {
       out.verdict = 'GATE UP';
       out.detail = unmatched.length
@@ -150,7 +160,11 @@ async function rehearse(context, row, config) {
     } else if (fillMode && (player || (out.playback && out.playback.audible))) {
       out.verdict = 'JOINED';
       out.detail = out.playback ? out.playback.action : 'player present';
-    } else if (unmatched.length) {
+    } else if (unmatched.length && !fillMode) {
+      // Only meaningful in read-only mode. Once a form has actually been submitted, GATE UP
+      // above is the honest test: a field left unmatched that did NOT stop us is not a problem.
+      // A site search box and a language selector were being reported as failures on calls that
+      // had already been joined.
       out.verdict = 'FIELDS';
       out.detail = unmatched.map((f) => JSON.stringify(f.description.slice(0, 34))).join(', ');
     } else if (blocker) {
@@ -240,6 +254,7 @@ async function rehearse(context, row, config) {
   console.log(`  TELEPHONE   ${by('TELEPHONE').length}   known telephone-only, refused up front`);
   console.log(`  ERROR       ${by('ERROR').length}   did not load`);
   console.log(`  UNRESOLVED  ${by('UNRESOLVED').length}   the portal's link is shortened and could not be recovered`);
+  console.log(`  NO SCHEDULE ${by('NO SCHEDULE').length}   no date in the portal, so the watcher would never dispatch it`);
 
   // Grouped, because one provider failing five times is one afternoon's work, not five.
   const hosts = new Map();
