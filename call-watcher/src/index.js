@@ -570,9 +570,17 @@ async function main() {
     // Reported on the Nth consecutive poll only, and then once - not on every poll after,
     // which would bury the log in identical lines for as long as the condition lasted.
     if (blindFor.noRows === BLIND_POLLS_BEFORE_ALARM) {
+      // The commonest cause has a signature worth naming: the portal is a single-page app and
+      // drops to its /login route when the session goes. Saying which of the two it is turns a
+      // guess into an instruction - one needs a human to sign in, the other needs a developer.
+      const url = portalPage.url();
       logger.error(
-        `Table produced ZERO rows on ${BLIND_POLLS_BEFORE_ALARM} consecutive polls - the portal ` +
-          'session may have expired, or the view/markup changed. No calls can be detected in this state.'
+        /\/login(?:$|[/?#])/i.test(url)
+          ? `Table produced ZERO rows on ${BLIND_POLLS_BEFORE_ALARM} consecutive polls and the ` +
+              `portal tab is at ${url} - it is LOGGED OUT. Sign in again in that Chrome window; ` +
+              'no calls can be detected until someone does.'
+          : `Table produced ZERO rows on ${BLIND_POLLS_BEFORE_ALARM} consecutive polls - the portal ` +
+              'session may have expired, or the view/markup changed. No calls can be detected in this state.'
       );
     } else if (blindFor.noLinks === BLIND_POLLS_BEFORE_ALARM) {
       logger.error(

@@ -79,6 +79,22 @@ async function rehearse(context, row, config) {
   try {
     let link = row.dialinLink;
 
+    // A truncated link is not a link. The portal shows most of them shortened, and the full URL
+    // has to be recovered by clicking the row; when that fails, testing what is left is worse
+    // than testing nothing - it produces a confident verdict about a URL that never existed.
+    //
+    // Three of the four "remaining failures" in the first full run were exactly this. GTLB and
+    // PATH were reported as ERR_NAME_NOT_RESOLVED, which was true of
+    // "gitlab-second-quarter-fiscal-2027-financia..." because the HOSTNAME was cut in half.
+    // GWRE reached Zoom's "Enter Meeting Info" because its pwd was chopped. Nothing was wrong
+    // with any of the three.
+    if (/(\.{3}|…)/.test(link)) {
+      out.host = hostOf(link);
+      out.verdict = 'UNRESOLVED';
+      out.detail = `portal shows a shortened link and clicking the row did not recover it: ${link}`;
+      return out;
+    }
+
     const phoneOnly = telephoneOnlyReason(link);
     if (phoneOnly) {
       out.host = hostOf(link);
@@ -219,11 +235,12 @@ async function rehearse(context, row, config) {
   console.log(`  NOT LIVE    ${by('NOT LIVE').length}   no player yet, but the call is hours away - expected`);
   console.log(`  TELEPHONE   ${by('TELEPHONE').length}   known telephone-only, refused up front`);
   console.log(`  ERROR       ${by('ERROR').length}   did not load`);
+  console.log(`  UNRESOLVED  ${by('UNRESOLVED').length}   the portal's link is shortened and could not be recovered`);
 
   // Grouped, because one provider failing five times is one afternoon's work, not five.
   const hosts = new Map();
   // NOT LIVE is deliberately excluded: it is not evidence of anything.
-  for (const r of results.filter((r) => ['GATE UP', 'FIELDS', 'BLOCKED', 'NO PLAYER', 'ERROR'].includes(r.verdict))) {
+  for (const r of results.filter((r) => ['GATE UP', 'FIELDS', 'BLOCKED', 'NO PLAYER', 'ERROR', 'UNRESOLVED'].includes(r.verdict))) {
     if (!hosts.has(r.host)) hosts.set(r.host, []);
     hosts.get(r.host).push(r.key);
   }
