@@ -44,7 +44,12 @@ const BROWSER_ENTRY_PATTERN = new RegExp(
     `watch (?:in|on|from) ${DET}browser`,
     `listen (?:in|on|via) ${DET}browser`,
     `use ${DET}web client`,
-    `join (?:on|from) the web\b`,
+    // Two backslashes, not one. These are template literals, where \b is the BACKSPACE
+    // escape rather than a word boundary - so written with a single backslash this
+    // alternative compiled to a pattern ending in an actual U+0008 character and could
+    // never match anything. "Join on the web" is how several providers word the browser
+    // option, and it was invisible to us the entire time.
+    `join (?:on|from) the web\\b`,
     'browser version',
   ].join('|'),
   'i'

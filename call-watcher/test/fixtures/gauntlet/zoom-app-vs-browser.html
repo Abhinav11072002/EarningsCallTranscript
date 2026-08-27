@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Launch Meeting - Zoom</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    Zoom's launch page, offering BOTH ways in at once.
+
+    "Join from Zoom Workplace app" must never be clicked. It fires a zoommtg:// handler, and the
+    operating system's "Open Zoom Workplace?" dialog takes the foreground - which is exactly what
+    the extension's keyboard shortcut needs moments later, so the capture fails on a call that
+    was otherwise joined perfectly. Nothing on screen looks wrong afterwards.
+
+    "Join from Your Browser" is the one to take, and it is checked first. The native test then
+    runs over the same text and wins any overlap, because clicking the app is the expensive
+    mistake while skipping a good link only costs a fallback.
+
+    Every wording Zoom uses for the app is marked forbidden here, including "Launch Meeting",
+    which is the default label when the page first loads and says nothing about an app at all.
+  -->
+  <h1>Launch Meeting</h1>
+  <p>Click Open Zoom Workplace on the dialog shown by your browser</p>
+
+  <a href="zoommtg://zoom.us/join?confno=92239478049" data-forbidden="true">Join from Zoom Workplace app</a>
+  <button type="button" data-forbidden="true">Launch Meeting</button>
+  <a href="https://zoom.us/download" data-forbidden="true">Download Now</a>
+
+  <p>Don't have Zoom Workplace installed?</p>
+  <a href="#browser" id="browser-link">Join from Your Browser</a>
+
+  <div id="meeting" style="display:none">
+    <div data-incall>Waiting for host to start the webinar</div>
+    <audio id="stream" controls></audio>
+  </div>
+
+  <script>
+    document.getElementById('browser-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      for (const el of document.querySelectorAll('[data-forbidden], #browser-link, h1, p')) {
+        el.style.display = 'none';
+      }
+      document.getElementById('meeting').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

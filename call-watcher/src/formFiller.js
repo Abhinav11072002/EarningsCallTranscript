@@ -1,4 +1,4 @@
-const { NATIVE_APP_PATTERN } = require('./joinFlow');
+const { NATIVE_APP_PATTERN, LEGITIMATE_WAIT_PATTERN } = require('./joinFlow');
 
 // The separator is [\s_-]* everywhere, not \s*. Real ids are hyphenated or underscored -
 // q4inc's registration form uses analyst-first-name, analyst-last-name, analyst-company-name -
@@ -272,8 +272,13 @@ const IRRELEVANT_FIELD_PATTERN = /newsletter|subscrib|search|promo|coupon|discou
 // matches REGISTRATION_BUTTON_PATTERN on the bare word "account", so a call that had just
 // registered correctly was clicked straight off the event and onto identity.q4inc.com. We
 // cannot create an account in any case: it needs a verified mailbox.
+//
+// "Host Sign in" is on Zoom's waiting-room screen, next to "Waiting for host to start the
+// webinar". It matches the registration pattern on "sign in", and clicking it took a capture
+// that had successfully joined and sent it to Zoom's login page instead. It is for the host;
+// we are an attendee, and there is nothing behind it for us.
 const IRRELEVANT_BUTTON_PATTERN =
-  /subscrib|newsletter|search|cookie|privacy|settings|preferences|create\s+(?:a|an)?\s*account|sign\s*up/i;
+  /subscrib|newsletter|search|cookie|privacy|settings|preferences|create\s+(?:a|an)?\s*account|sign\s*up|host\s*sign\s*in|sign\s*in\s+as\s+(?:a\s+)?host/i;
 
 // Gates we have no way to satisfy - a passcode, PIN, attendee ID or conference code. None of
 // these match the identity patterns, so before this they read as "no gate at all".
@@ -463,6 +468,7 @@ async function hasNonFurnitureRegistrationButton(frame) {
 async function fillVisibleFields(frame, identity, logger, allowFurnitureFallback = false) {
   const targets = await collectFillableFields(frame, identity, allowFurnitureFallback);
   let filledCount = 0;
+  const filledKeys = [];
   for (const { el, tag, description, key } of targets) {
     try {
       if (tag === 'select') {
@@ -497,10 +503,44 @@ async function fillVisibleFields(frame, identity, logger, allowFurnitureFallback
         continue;
       }
       filledCount++;
+      filledKeys.push(key);
     } catch (err) {
       logger.warn(`Could not fill field "${description.trim() || key}": ${err.message}`);
     }
   }
+  // A field can be filled, verified, and then emptied again before anything is submitted.
+  //
+  // Zoom's web client is the case that showed it: it mounts its own React state after the first
+  // paint and overwrites whatever is already in the inputs. The fill succeeded, inputValue()
+  // confirmed it, hydration then wiped both boxes, and "Join" was clicked on an empty form -
+  // four times, once per step, each one looking in the log like a completed attempt.
+  //
+  // So the values are checked once more after a beat, and restored if they have gone. Cheap,
+  // and it only ever acts when something really did clear them.
+  if (filledCount) {
+    await frame.page().waitForTimeout(700);
+    const restored = [];
+    for (const { el, tag, key, description } of targets) {
+      if (tag === 'select') continue;
+      const now = await el.inputValue().catch(() => null);
+      if (now === null || String(now).trim()) continue;
+      const ok = await el
+        .fill(String(identity[key]))
+        .then(() => true)
+        .catch(() => false);
+      if (ok) restored.push(key);
+      else logger.warn(`Field "${description.trim() || key}" was cleared and could not be refilled.`);
+    }
+    if (restored.length) {
+      logger.info(`Refilled ${restored.length} field(s) the page had cleared: ${restored.join(', ')}.`);
+    }
+  }
+
+  // Logged for the same reason the click is: without it the log shows a form being submitted
+  // and cannot say whether anything was typed into it first, and those two failures need
+  // opposite fixes. One line per frame rather than one per field, so a long form stays legible.
+  if (filledKeys.length) logger.info(`Filled ${filledKeys.length} field(s): ${filledKeys.join(', ')}.`);
+  else if (targets.length) logger.info(`Found ${targets.length} fillable field(s) but none retained a value.`);
   return filledCount;
 }
 
@@ -1181,6 +1221,20 @@ async function hasUnsolvableChallenge(page) {
   return false;
 }
 
+// True when any frame says we are waiting for the call to begin rather than being blocked.
+async function pageShowsLegitimateWait(page) {
+  for (const frame of page.frames()) {
+    const waiting = await frame
+      .evaluate(
+        (source) => new RegExp(source, 'i').test((document.body && document.body.innerText) || ''),
+        LEGITIMATE_WAIT_PATTERN.source
+      )
+      .catch(() => false);
+    if (waiting) return true;
+  }
+  return false;
+}
+
 async function hasRegistrationSuccess(page) {
   for (const frame of page.frames()) {
     const found = await frame
@@ -1241,6 +1295,15 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
     // navigating away is worse than failing to register: it looks like progress.
     if (step > 0 && (await hasRegistrationSuccess(page).catch(() => false))) {
       logger.info('The provider confirmed the registration; leaving the page alone.');
+      break;
+    }
+
+    // A waiting room is a destination, not an obstacle. Zoom's says "Waiting for host to start
+    // the webinar" and offers a "Host Sign in" button; carrying on past that is how a capture
+    // that had already joined ended up on Zoom's login page. Anything that looks like a lobby
+    // is where we want to be, and the right move is to stop touching the page.
+    if (step > 0 && (await pageShowsLegitimateWait(page).catch(() => false))) {
+      logger.info('The page is in a waiting room; we are through the gate. Leaving it alone.');
       break;
     }
     let acted = false;

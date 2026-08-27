@@ -158,7 +158,9 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
           const truncatedPrefix = dialinLink.replace(/(\.{3}|…).*$/, '');
           // Serialized: see portalClickMutex.
           dialinLink = await portalClickMutex.run(() =>
-            resolveDialinLinkByClick(context, portalPage, row.symbol, logger)
+            // The truncated text identifies WHICH row to click. A symbol alone does not: it can
+            // appear several times, and the first occurrence is not necessarily this call.
+            resolveDialinLinkByClick(context, portalPage, row.symbol, logger, row.dialinLink)
           );
           // The click resolver finds the row by symbol text alone, so this guards against it
           // having matched a different row for the same ticker: the full URL must extend the
