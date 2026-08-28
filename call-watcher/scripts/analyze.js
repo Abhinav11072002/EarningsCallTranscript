@@ -19,9 +19,12 @@
 //   belongs.
 //
 // Usage:
-//   npm run analyze              today
-//   npm run analyze -- --all     every day on disk
-//   npm run analyze -- 2026-08-26
+//   npm run analyze                              today
+//   npm run analyze -- yesterday                 just yesterday
+//   npm run analyze -- --since yesterday         last night and this morning together
+//   npm run analyze -- 2026-08-27..2026-08-28    an explicit span, inclusive
+//   npm run analyze -- 2026-08-26                one day
+//   npm run analyze -- --all                     every day on disk
 const fs = require('fs');
 const path = require('path');
 
@@ -153,16 +156,50 @@ function readLedger(file) {
   return out;
 }
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function dateOf(file) {
+  return file.slice(9, 19);
+}
+
+// A day boundary is the wrong unit for this work and always has been: European and Asian calls
+// run through the night here, so "how did last night go" spans two ledger files and used to
+// need two runs and mental arithmetic to combine.
 function ledgerFiles(arg) {
   const all = fs
     .readdirSync(DATA_DIR)
     .filter((f) => /^outcomes-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
     .sort();
+
   if (arg === '--all') return all;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(arg || '')) return all.filter((f) => f.includes(arg));
-  const today = new Date();
-  const stamp = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  return all.filter((f) => f.includes(stamp));
+
+  // 2026-08-27..2026-08-28 - an inclusive span.
+  const span = String(arg || '').match(/^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/);
+  if (span) {
+    const [, from, to] = span;
+    return all.filter((f) => dateOf(f) >= from && dateOf(f) <= to);
+  }
+
+  // --since 2026-08-27, or --since yesterday - everything from that day to now.
+  if (String(arg || '') === '--since') {
+    const raw = process.argv[3];
+    const from = raw === 'yesterday' ? stampFor(-1) : raw;
+    if (!DATE.test(String(from || ''))) return [];
+    return all.filter((f) => dateOf(f) >= from);
+  }
+
+  if (DATE.test(String(arg || ''))) return all.filter((f) => dateOf(f) === arg);
+  if (String(arg || '') === 'yesterday') return all.filter((f) => dateOf(f) === stampFor(-1));
+
+  return all.filter((f) => dateOf(f) === stampFor(0));
+}
+
+// Local dates, deliberately: the ledger files are named in local time, and comparing them
+// against a UTC stamp would silently pick the wrong day for anyone west of Greenwich.
+function stampFor(dayOffset) {
+  const day = new Date();
+  day.setDate(day.getDate() + dayOffset);
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
 }
 
 function bar(n, max, width = 24) {
@@ -171,7 +208,15 @@ function bar(n, max, width = 24) {
 
 const files = ledgerFiles(process.argv[2]);
 if (!files.length) {
-  console.log('No ledger files for that date. Try: npm run analyze -- --all');
+  console.log('No ledger files for that date or range.');
+  console.log('  npm run analyze -- --since yesterday          last night and this morning');
+  console.log('  npm run analyze -- 2026-08-27..2026-08-28     an explicit span');
+  console.log('  npm run analyze -- --all                      everything on disk');
+  const available = fs
+    .readdirSync(DATA_DIR)
+    .filter((f) => /^outcomes-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+    .map((f) => f.slice(9, 19));
+  if (available.length) console.log(`\nDays on disk: ${available.join(', ')}`);
   process.exit(0);
 }
 
