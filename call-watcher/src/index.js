@@ -599,6 +599,9 @@ async function main() {
     const retryWindowMinutes = Number(config.retryWindowMinutes ?? 120);
     const lateStartGraceMinutes = Number(config.lateStartGraceMinutes ?? 0);
     const dueRows = [];
+    // Rows past their start whose record does not say "started". Each is either genuinely
+    // missed or quietly recording; only the extension can say which.
+    const lateCandidates = [];
     let parseableTimes = 0;
     let linkedRows = 0;
     for (const row of rows) {
@@ -655,25 +658,15 @@ async function main() {
       // burning the pipeline lock on a capture that could no longer be complete anyway.
       const late = shouldSkipAsLate({ minsLeft, record, lateStartGraceMinutes });
       if (late) {
-        const warnKey = `late|${key}`;
-        if (!warnedUnparseable.has(warnKey)) {
-          warnedUnparseable.add(warnKey);
-          logger.warn(
-            `Missed ${row.symbol} ${row.fiscalPeriod}: ${late.reason}, and the call started ` +
-              `${late.minsPastStart} min ago. Not going back to it - an attempt has to begin ` +
-              `before the call does.`
-          );
-          obs.recordOutcome({
-            status: 'skipped-late',
-            symbol: row.symbol,
-            fiscalPeriod: row.fiscalPeriod,
-            earningsDate: row.earningsDate,
-            dialinUrl: row.dialinLink,
-            minsPastStart: late.minsPastStart,
-            attempts: late.attempts,
-            reason: late.reason,
-          });
-        }
+        // NOT condemned here. A record that says "attempted without success" is not proof that
+        // nothing is recording: the trigger can succeed and its CONFIRMATION fail - the popup's
+        // stream list is read with a short timeout - and the extension then records the whole
+        // call while the ledger says the call was missed. FRO 2026Q2 was recorded in full and
+        // reported as missed, which is the worst direction for these numbers to be wrong in.
+        //
+        // So the verdict waits until the extension has been asked. The check needs the stream
+        // read that happens once per poll below, hence the deferral rather than a second read.
+        lateCandidates.push({ row, key, late });
         continue;
       }
       dueRows.push({ row, key, record, minsLeft });
@@ -729,7 +722,9 @@ async function main() {
       chromeConnected: browser.isConnected(),
     });
 
-    if (!dueRows.length) return;
+    // Deliberately NOT returning early on an empty dueRows: the late candidates below still
+    // need the stream read, and a poll with nothing due is exactly when a call that failed its
+    // confirmation is sitting there recording, unrecognised.
     // Soonest first: calls cluster on the hour and half-hour, and the pipeline is serialized,
     // so geometry order could leave the most imminent call waiting behind less urgent ones.
     dueRows.sort((a, b) => a.minsLeft - b.minsLeft);
@@ -746,7 +741,7 @@ async function main() {
     // process from a dead one. When a pipeline is in flight, reconciliation simply waits for
     // the next poll; rows with no record are unaffected and still dispatch immediately.
     let streams = null;
-    if (queuedPipelines === 0 && dueRows.some((d) => d.record)) {
+    if (queuedPipelines === 0 && (dueRows.some((d) => d.record) || lateCandidates.length)) {
       try {
         streams = await getActiveStreams(context, config);
         consecutiveStreamReadFailures = 0;
@@ -757,6 +752,45 @@ async function main() {
         );
       }
     }
+
+    // Settled here, with the stream list in hand.
+    for (const { row, key, late } of lateCandidates) {
+      if (streams === null) continue; // cannot check; ask again next poll rather than accuse
+      if (streamMatchesRow(streams, row)) {
+        // It is recording right now. The attempt's confirmation failed, not the attempt.
+        if (!warnedUnparseable.has(`recovered|${key}`)) {
+          warnedUnparseable.add(`recovered|${key}`);
+          logger.info(
+            `${row.symbol} ${row.fiscalPeriod} is recording after all - the extension has an ` +
+              'active stream for it. The attempt that looked like a failure only failed to be ' +
+              'confirmed.'
+          );
+        }
+        store.markStarted(key);
+        continue;
+      }
+
+      const warnKey = `late|${key}`;
+      if (warnedUnparseable.has(warnKey)) continue;
+      warnedUnparseable.add(warnKey);
+      logger.warn(
+        `Missed ${row.symbol} ${row.fiscalPeriod}: ${late.reason}, and the call started ` +
+          `${late.minsPastStart} min ago. Not going back to it - an attempt has to begin ` +
+          `before the call does.`
+      );
+      obs.recordOutcome({
+        status: 'skipped-late',
+        symbol: row.symbol,
+        fiscalPeriod: row.fiscalPeriod,
+        earningsDate: row.earningsDate,
+        dialinUrl: row.dialinLink,
+        minsPastStart: late.minsPastStart,
+        attempts: late.attempts,
+        reason: late.reason,
+      });
+    }
+
+    if (!dueRows.length) return;
 
     // Pass 2: reconcile against what the extension is actually recording, then dispatch.
     const reacquireGraceMinutes = Number(config.reacquireGraceMinutes ?? 30);
