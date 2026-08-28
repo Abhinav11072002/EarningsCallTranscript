@@ -264,14 +264,20 @@ const FURNITURE_SELECTOR = 'nav, header, footer, [role=navigation], [role=search
 // Inputs that look identity-ish but never belong to a gate. Excluded everywhere, regardless of
 // position, because typing into them can trigger navigation or an autocomplete overlay that
 // covers the player - and subscribing the dummy identity to a mailing list is a real side effect.
+const IRRELEVANT_FIELD_PATTERN = /newsletter|subscrib|search|promo|coupon|discount|voucher/i;
+
+// The Q&A box inside a call, which must never be typed into: it is visible to the company and
+// to everyone else attending, and no recording depends on it. The required-field fallback typed
+// "Other" into "Enter your questions here" on RZLV 2026Q2 before this existed.
 //
-// The question box belongs on this list above all. It sits INSIDE the call, not on the gate -
-// "Enter your questions here" on edge.media-server.com's player - and the required-field
-// fallback dutifully typed "Other" into it on RZLV 2026Q2. Submitting a made-up question to a
-// live earnings call is not a cosmetic mistake; it is visible to the company and to everyone
-// else attending, and no recording depends on it.
-const IRRELEVANT_FIELD_PATTERN =
-  /newsletter|subscrib|search|promo|coupon|discount|voucher|question|comment|message|feedback|enquir|inquir/i;
+// Matched on PHRASING, not on the bare word "question", and that distinction is the whole rule.
+// Zoom names every field on its registration form question_first_name, question_last_name,
+// question_email - it calls registration fields "questions" - so excluding the word outright
+// broke every Zoom registration form in the book while fixing one player. BW LNG 2026Q2 was the
+// call that showed it: three matched fields, none filled, "Register" clicked four times on an
+// empty form.
+const QA_FIELD_PATTERN =
+  /ask (?:a |your )?question|your question|enter your question|questions? here|submit (?:a )?question|post a question|leave (?:a )?(?:comment|message)|your (?:comment|message|feedback)/i;
 
 // Buttons that must never be clicked while hunting for a registration CTA.
 // "Create Account" is an upsell, never a way in. q4inc shows it on the page AFTER a successful
@@ -300,15 +306,32 @@ function isFurniture(handle) {
 
 // Spam honeypots are positioned off-screen and expected to stay empty; filling one is a common
 // way to get a registration silently rejected. Playwright's :visible only requires a non-empty
-// box, so an element at left:-9999px still counts as visible - verified with a fixture whose
-// honeypot received the dummy email.
+// box, so an element at left:-9999px still counts as visible - verified by the
+// honeypot-and-disabled fixture, whose trap field used to receive the dummy email.
+//
+// Measured against the VIEWPORT, this also threw away every field below the fold. BW LNG's Zoom
+// registration puts its three boxes at y=768 on an 800-tall window: all three enabled, editable
+// and perfectly fillable, all three skipped, and "Register" was then clicked four times on an
+// empty form. The page just needed scrolling, which Playwright does by itself before typing.
+//
+// So the comparison is against the DOCUMENT. A field further down the page is ordinary; a field
+// parked outside the document entirely is the trap.
 function isOffscreen(handle) {
   return handle
     .evaluate((node) => {
       const r = node.getBoundingClientRect();
-      const w = window.innerWidth || document.documentElement.clientWidth;
-      const h = window.innerHeight || document.documentElement.clientHeight;
-      return r.right < 0 || r.bottom < 0 || r.left > w || r.top > h;
+      const top = r.top + window.scrollY;
+      const left = r.left + window.scrollX;
+      const docWidth = Math.max(
+        document.documentElement.scrollWidth,
+        document.body ? document.body.scrollWidth : 0
+      );
+      const docHeight = Math.max(
+        document.documentElement.scrollHeight,
+        document.body ? document.body.scrollHeight : 0
+      );
+      // The 50px margin keeps a field flush against an edge from being mistaken for a trap.
+      return left + r.width < -50 || top + r.height < -50 || left > docWidth + 50 || top > docHeight + 50;
     })
     .catch(() => false);
 }
@@ -429,7 +452,7 @@ async function collectFillableFields(frame, identity, allowFurnitureFallback) {
     if (await isOffscreen(el)) continue;
 
     const description = await describeField(el);
-    if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
+    if (IRRELEVANT_FIELD_PATTERN.test(description) || QA_FIELD_PATTERN.test(description)) continue;
     const key = matchField(description);
     if (!key || identity[key] === undefined) continue;
     // "Attachment file name" ends in " name", which the fullName pattern matches - so a file
@@ -811,9 +834,13 @@ async function fillRequiredUnmatched(frame, identity, logger) {
     if (((await el.inputValue().catch(() => '')) || '').trim()) continue; // already answered
 
     const description = await describeField(el);
-    if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
+    if (IRRELEVANT_FIELD_PATTERN.test(description) || QA_FIELD_PATTERN.test(description)) continue;
     if (matchField(description)) continue; // the normal path owns this one
     if (await isFurniture(el)) continue;
+    // Belt and braces on the one path that reached a live call. A registration form asks for
+    // values in <input> elements; a free-text box on a player is a <textarea>, and inventing an
+    // answer for one is never worth the risk of posting it to the call.
+    if ((await el.evaluate((node) => node.tagName.toLowerCase()).catch(() => '')) === 'textarea') continue;
 
     const required = await el
       .evaluate((node) => {
