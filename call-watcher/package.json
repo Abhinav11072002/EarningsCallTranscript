@@ -19,7 +19,8 @@
     "test:resolver": "node scripts/tests/test-webcast-resolver.js",
     "test:join": "node scripts/tests/test-join-flow.js",
     "test:gauntlet": "node scripts/tests/test-gauntlet.js",
-    "capture:registration": "node scripts/tests/capture-registration-fixture.js"
+    "capture:registration": "node scripts/tests/capture-registration-fixture.js",
+    "test:fuzz": "node scripts/tests/test-fuzz.js"
   },
   "dependencies": {
     "playwright-core": "^1.47.2"

@@ -368,7 +368,7 @@ const ENTRY_BUTTON_PATTERN =
 // webcastResolver.js's STALE_LINK_PATTERN: the resolver already refuses to navigate to these,
 // and the form filler must equally refuse to click them - "Listen to the replay" scores as a
 // perfectly good CTA otherwise, and produces a capture that looks entirely successful.
-const STALE_BUTTON_PATTERN = /replay|archive|on-?demand|playback|recording|transcript|presentation|slides?|download/i;
+const STALE_BUTTON_PATTERN = /replay|archive|on-?demand|playback|recording|transcript|presentation|slides?\b|download/i;
 
 // Controls that SWITCH THE FORM to a different mode rather than submitting it. Clicking one
 // throws away everything just typed, which is worse than clicking nothing at all.
@@ -1457,7 +1457,17 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
       await tickWaiverCheckboxes(frame, logger);
       // Last, so it only ever sees what everything else declined to answer.
       await fillRequiredUnmatched(frame, identity, logger);
-      const outcome = await clickFirstMatchingButton(page, frame, logger, filledCount > 0, filledCount === 0);
+      // `lastAction` matters as much as `filledCount` here, and only on a form split across
+      // steps. The second step often has NOTHING to type - just a confirmation and a button -
+      // so filledCount is 0 there, which used to restrict the click to registration-worded
+      // buttons only. A step-two button reading "Submit" or "Continue" is neither, so the form
+      // was abandoned one click from done, with every field correctly filled behind it.
+      //
+      // Having already typed into this form is what makes the difference. On a page where
+      // nothing has ever been filled the restriction still holds, which is what stops a random
+      // CTA being clicked on a page that has no gate at all.
+      const committed = filledCount > 0 || lastAction;
+      const outcome = await clickFirstMatchingButton(page, frame, logger, committed, !committed);
       if (outcome.clicked && outcome.entryWorded && !REGISTRATION_BUTTON_PATTERN.test(outcome.clickedText)) {
         clearedEntryButtons.add(outcome.clickedText);
       }

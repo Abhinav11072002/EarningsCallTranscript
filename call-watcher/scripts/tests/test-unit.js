@@ -1810,6 +1810,63 @@ check('dispatchRules: a call that really was never captured is still reported', 
   assert.match(tried.reason, /attempted 3x/);
 });
 
+// Bytes that must never appear in source: NUL, BACKSPACE, VERTICAL TAB, FORM FEED.
+const CONTROL_CHARS = new RegExp('[' + ['\\u0000', '\\u0008', '\\u000b', '\\u000c'].join('') + ']');
+const NEWLINE = String.fromCharCode(10);
+const REPO_ROOT = require('path').join(__dirname, '..', '..');
+
+check('no source file contains a stray control character', () => {
+  // A whole class of silent bug, met twice, invisible both times.
+  //
+  // In a TEMPLATE LITERAL, \b is the BACKSPACE escape rather than a word boundary - so
+  // `join (?:on|from) the web\b` compiled to a pattern ending in U+0008 that could never match
+  // anything, and any provider wording its browser option "Join on the web" was invisible to us
+  // for as long as that line existed. The same character later reached a regex LITERAL through
+  // a scripted edit and killed the "slides?" alternative of STALE_BUTTON_PATTERN.
+  //
+  // Neither is visible when reading the file, neither fails a syntax check, and both simply make
+  // a rule quietly stop applying. Reading the bytes is the only way to catch it.
+  const fs = require('fs');
+  const path = require('path');
+  const offenders = [];
+
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== 'node_modules') walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith('.js')) continue;
+      const text = fs.readFileSync(full, 'utf8');
+      const lines = text.split(NEWLINE);
+      for (let index = 0; index < lines.length; index++) {
+        // Tab, newline and carriage return are legitimate. These four never are.
+        const found = CONTROL_CHARS.exec(lines[index]);
+        if (!found) continue;
+        const code = found[0].charCodeAt(0).toString(16).padStart(4, '0');
+        offenders.push(path.relative(REPO_ROOT, full) + ':' + (index + 1) + ' contains U+' + code);
+      }
+    }
+  };
+  walk(path.join(REPO_ROOT, 'src'));
+  walk(path.join(REPO_ROOT, 'scripts'));
+
+  assert.deepStrictEqual(offenders, [], 'stray control characters: ' + offenders.join('; '));
+});
+
+check('the patterns that escape hazard broke actually match', () => {
+  // Asserted on the exact wordings that silently stopped matching.
+  assert.ok(BROWSER_ENTRY_PATTERN.test('Join on the web'), '"Join on the web" must be recognised');
+  assert.ok(BROWSER_ENTRY_PATTERN.test('Join from the web'), '"Join from the web" must be recognised');
+  assert.ok(BROWSER_ENTRY_PATTERN.test('Join from Your Browser'), 'the common wording must still work');
+  assert.ok(NATIVE_APP_PATTERN.test('Join from Zoom Workplace app'), 'the app link must still be refused');
+  assert.ok(
+    !BROWSER_ENTRY_PATTERN.test('Join from Zoom Workplace app'),
+    'and the app link must never be read as the browser one'
+  );
+});
+
 // ---------------------------------------------------------------- report
 
 (async () => {
