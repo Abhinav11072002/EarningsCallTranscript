@@ -22,7 +22,21 @@
 function shouldSkipAsLate({ minsLeft, record, lateStartGraceMinutes = 0 }) {
   // A capture already in progress is never "late" - its stream may need reacquiring, which the
   // caller decides using reacquireGraceMinutes.
-  if (record && record.status === 'started') return null;
+  //
+  // Neither is a call that has already REACHED A TERMINAL STATE. A completed record means the
+  // poll loop has finished with this call, one way or the other, and whatever happened was
+  // recorded when it happened. Saying "missed" about it afterwards is not a second opinion, it
+  // is a second, wrong entry.
+  //
+  // FRO 2026Q2 is what this looked like. It joined fifteen minutes early, audio audible,
+  // written to the ledger as started - a complete and correct capture, with the transcript to
+  // show for it. When the call ended its stream vanished, the loop marked it completed, and
+  // every poll after that fell through to here and reported "Missed FRO 2026Q2: attempted 1x
+  // without success". Twice in the ledger, once per process, on a call that worked.
+  //
+  // Pass 2 of the poll loop has always treated completed as terminal. This is the same rule,
+  // applied one pass earlier.
+  if (record && (record.status === 'started' || record.status === 'completed')) return null;
   if (minsLeft > -lateStartGraceMinutes) return null;
 
   const attempts = record ? record.attempts || 0 : 0;

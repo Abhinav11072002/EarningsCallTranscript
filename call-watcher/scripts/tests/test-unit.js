@@ -1777,6 +1777,39 @@ check('providerRules: a normal webcast link is not mistaken for telephone-only',
   assert.strictEqual(telephoneOnlyReason('https://event.choruscall.com/mediaframe/webcast.html?webcastid=x'), null);
 });
 
+check('dispatchRules: a call that was recorded and finished is never reported as missed', () => {
+  // FRO 2026Q2: joined fifteen minutes early, audio audible, written to the ledger as started,
+  // transcript delivered. Its stream vanished when the call ended, the loop marked it
+  // completed, and every poll afterwards announced "Missed FRO 2026Q2: attempted 1x without
+  // success" - about a call that had worked perfectly. The ledger disagreed with reality in the
+  // worst direction: under-reporting success invites fixing what was never broken.
+  assert.strictEqual(
+    shouldSkipAsLate({ minsLeft: -101, record: { status: 'completed', attempts: 1 } }),
+    null
+  );
+});
+
+check('dispatchRules: a call given up on is terminal too, not missed again every poll', () => {
+  // markCompleted is also how "gave up reacquiring after 4 attempts" ends. That failure was
+  // recorded when it happened; repeating it as a skipped-late entry adds nothing and double
+  // counts one call.
+  assert.strictEqual(
+    shouldSkipAsLate({ minsLeft: -101, record: { status: 'completed', attempts: 4 } }),
+    null
+  );
+});
+
+check('dispatchRules: a call that really was never captured is still reported', () => {
+  // The exemption must not swallow the case the warning exists for.
+  const never = shouldSkipAsLate({ minsLeft: -101, record: null });
+  assert.ok(never, 'a call with no record at all, past its start, is missed');
+  assert.match(never.reason, /never attempted/);
+
+  const tried = shouldSkipAsLate({ minsLeft: -101, record: { status: 'failed', attempts: 3 } });
+  assert.ok(tried, 'a failed record past the start is missed');
+  assert.match(tried.reason, /attempted 3x/);
+});
+
 // ---------------------------------------------------------------- report
 
 (async () => {
