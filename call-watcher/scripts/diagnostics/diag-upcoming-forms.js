@@ -38,6 +38,18 @@
 //   node scripts/diagnostics/diag-upcoming-forms.js            last 40 rows with a link
 //   node scripts/diagnostics/diag-upcoming-forms.js 15         last 15
 //   node scripts/diagnostics/diag-upcoming-forms.js 40 --fill  actually fill and submit
+//
+//   --after "2026-08-27 17:00" --before "2026-08-28 10:00"
+//       only calls scheduled inside that window, instead of the last N rows in the table.
+//       This is how to test a population rather than whatever happens to sit at the bottom of
+//       the table: the overnight book is Chinese and European providers, and the tail of the
+//       table is American ones, so testing the tail says nothing about the calls that fail.
+//
+//       Times are read in the machine's own timezone, matching the portal's countdown. A window
+//       in the PAST is allowed and useful - the pages usually still resolve and still show
+//       their registration form, so the link and form paths are exercised even though nothing
+//       live is left to join. Anything reported as JOINED for a past call means the page still
+//       served a player, not that a live call was captured.
 const { chromium } = require('playwright-core');
 const { loadConfig } = require('../../src/loadConfig');
 const { extractRows, minutesUntilCall } = require('../../src/tableWatcher');
@@ -52,6 +64,28 @@ const { playerProbe } = require('../../src/pageRelevance');
 const { splitFiscalPeriod } = require('../../src/extensionTrigger');
 
 const limit = Number(process.argv.find((a) => /^\d+$/.test(a)) || 40);
+
+// "2026-08-27 17:00" -> epoch ms, in local time. Deliberately not Date.parse of the raw string:
+// that reads a bare "YYYY-MM-DD" as UTC and would shift the window by the timezone offset.
+function localTime(value) {
+  const m = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?$/);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0)).getTime();
+}
+
+function optionValue(name) {
+  const at = process.argv.indexOf(name);
+  return at === -1 ? null : process.argv[at + 1];
+}
+
+const after = localTime(optionValue('--after'));
+const before = localTime(optionValue('--before'));
+for (const [flag, value] of [['--after', '--after'], ['--before', '--before']]) {
+  if (optionValue(value) && localTime(optionValue(value)) === null) {
+    console.error(`${flag} needs a time like "2026-08-27 17:00"`);
+    process.exit(1);
+  }
+}
 const verbose = process.argv.includes('--verbose');
 const fillMode = process.argv.includes('--fill');
 
@@ -71,6 +105,11 @@ function hostOf(url) {
 // One row's verdict, in the order the pipeline would reach each conclusion.
 // Beyond this, a page with no player tells us nothing: the event has not started.
 const NOT_LIVE_YET_MINUTES = 120;
+
+// And on the other side, a call that finished hours ago has no stream left to find. Without
+// this, every past call in a --after/--before window came back as "NO PLAYER - a real problem",
+// which is the loudest verdict the tool has and was wrong seven times out of seven.
+const CALL_LIKELY_OVER_MINUTES = 120;
 
 async function rehearse(context, row, config) {
   const out = { key: `${row.symbol} ${row.fiscalPeriod}`, host: null, verdict: null, detail: '', fields: [] };
@@ -176,7 +215,8 @@ async function rehearse(context, row, config) {
       // acting on and forty rows of noise.
       const minsLeft = minutesUntilCall(row);
       const notYet = minsLeft === null || minsLeft > NOT_LIVE_YET_MINUTES;
-      out.verdict = notYet ? 'NOT LIVE' : 'NO PLAYER';
+      const longOver = minsLeft !== null && minsLeft < -CALL_LIKELY_OVER_MINUTES;
+      out.verdict = notYet ? 'NOT LIVE' : longOver ? 'CALL OVER' : 'NO PLAYER';
       out.detail =
         `title ${JSON.stringify(((probe && probe.title) || '').slice(0, 50))}` +
         (minsLeft === null ? '' : `, ${Math.round(minsLeft)} min away`);
@@ -204,10 +244,31 @@ async function rehearse(context, row, config) {
 
   const all = await extractRows(portalPage);
   const withLinks = all.filter((r) => r.dialinLink && r.dialinLink !== '-');
-  const rows = withLinks.slice(-limit);
+
+  // A window selects by WHEN the call is, which is the only way to test a population. Rows the
+  // portal never scheduled have no time to compare and are dropped here rather than reported -
+  // the watcher would never dispatch them either.
+  let rows;
+  if (after !== null || before !== null) {
+    const now = Date.now();
+    const scheduled = withLinks
+      .map((row) => {
+        const mins = minutesUntilCall(row);
+        return { row, at: mins === null ? null : now + mins * 60000 };
+      })
+      .filter((entry) => entry.at !== null)
+      .filter((entry) => (after === null || entry.at >= after) && (before === null || entry.at <= before))
+      .sort((a, b) => a.at - b.at);
+    rows = scheduled.slice(0, limit).map((entry) => entry.row);
+    const window = `${optionValue('--after') || 'any'} to ${optionValue('--before') || 'any'}`;
+    console.log('');
+    console.log(`${scheduled.length} call(s) with a link scheduled between ${window}; walking ${rows.length}.`);
+  } else {
+    rows = withLinks.slice(-limit);
+  }
 
   console.log('');
-  console.log(`Portal shows ${all.length} row(s), ${withLinks.length} with a dial-in link. Rehearsing the last ${rows.length}.`);
+  console.log(`Portal shows ${all.length} row(s), ${withLinks.length} with a dial-in link. Rehearsing ${rows.length}.`);
   console.log(
     fillMode
       ? 'FILL MODE: forms will be filled and submitted for real. Nothing is recorded.'
@@ -251,6 +312,7 @@ async function rehearse(context, row, config) {
   console.log(`  BLOCKED     ${by('BLOCKED').length}   a gate in the way (passcode, CAPTCHA, sign-in)`);
   console.log(`  NO PLAYER   ${by('NO PLAYER').length}   nothing to record, and the call is due - a real problem`);
   console.log(`  NOT LIVE    ${by('NOT LIVE').length}   no player yet, but the call is hours away - expected`);
+  console.log(`  CALL OVER   ${by('CALL OVER').length}   the call finished hours ago, so there is no stream left - expected`);
   console.log(`  TELEPHONE   ${by('TELEPHONE').length}   known telephone-only, refused up front`);
   console.log(`  ERROR       ${by('ERROR').length}   did not load`);
   console.log(`  UNRESOLVED  ${by('UNRESOLVED').length}   the portal's link is shortened and could not be recovered`);
@@ -259,6 +321,7 @@ async function rehearse(context, row, config) {
   // Grouped, because one provider failing five times is one afternoon's work, not five.
   const hosts = new Map();
   // NOT LIVE is deliberately excluded: it is not evidence of anything.
+  // NOT LIVE and CALL OVER are excluded: neither is evidence of anything being wrong.
   for (const r of results.filter((r) => ['GATE UP', 'FIELDS', 'BLOCKED', 'NO PLAYER', 'ERROR', 'UNRESOLVED'].includes(r.verdict))) {
     if (!hosts.has(r.host)) hosts.set(r.host, []);
     hosts.get(r.host).push(r.key);
