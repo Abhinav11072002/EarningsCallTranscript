@@ -30,7 +30,22 @@ function loadConfig() {
     // much less obvious way.
     throw new Error(`config.local.json exists but could not be parsed: ${err.message}`);
   }
-  return { ...config, ...local };
+  const merged = { ...config, ...local };
+
+  // The shallow merge has one sharp edge: a config.local.json that overrides dummyIdentity
+  // replaces the WHOLE object, so a machine whose local file predates a new identity key
+  // silently loses it - and the symptom is not an error, it is a required field left empty on
+  // one machine and filled on another.
+  //
+  // These two have defaults because the filler is written to rely on them: jobTitle answers
+  // "Position" and "Company Role", and fallbackAnswer is what goes into a required field
+  // nothing else could identify. Missing, they degrade quietly; defaulted, they cannot.
+  merged.dummyIdentity = {
+    jobTitle: 'Analyst',
+    fallbackAnswer: 'Other',
+    ...(merged.dummyIdentity || {}),
+  };
+  return merged;
 }
 
 module.exports = { loadConfig, CONFIG_PATH, LOCAL_CONFIG_PATH };
