@@ -30,6 +30,8 @@ const SPEC = {
   reacquireWithinMinutesOfStart: { type: 'number', min: 0, max: 60 },
   absentObservationsBeforeComplete: { type: 'int', min: 1, max: 20 },
   maxCallTabMinutes: { type: 'int', min: 1, max: 1440 },
+  hardMaxCallTabMinutes: { type: 'int', min: 1, max: 1440 },
+  callTabEndedGraceMinutes: { type: 'int', min: 0, max: 240 },
   stateRecordTtlDays: { type: 'int', min: 1, max: 365 },
   logRetentionDays: { type: 'int', min: 1, max: 365 },
   extensionShortcutSendKeys: { type: 'string', required: true },

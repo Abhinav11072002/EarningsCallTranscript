@@ -288,7 +288,7 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
     store.markStarted(key);
     // Hand the tab to the registry instead of closing it: the capture lives in this tab, so
     // it must stay open until the call is over. The registry is what eventually closes it.
-    callTabs.register(key, page, `${row.symbol} ${row.fiscalPeriod}`);
+    callTabs.register(key, page, `${row.symbol} ${row.fiscalPeriod}`, row.dueAt ?? null, row);
     logger.info(`Done: ${row.symbol} ${row.fiscalPeriod} (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
     obs.recordOutcome({
       status: 'started',
@@ -686,15 +686,6 @@ async function main() {
       );
     }
 
-    // Close tabs whose call is over. Without this every successful call leaves a tab holding a
-    // live capture for as long as the process runs - fine for an afternoon, fatal over days.
-    // `completed` is set by the reconciliation below; the age cap catches calls whose ending we
-    // never observed (e.g. the extension was reloaded and its storage cleared).
-    callTabs.sweep(
-      (k) => store.get(k)?.status === 'completed',
-      Number(config.maxCallTabMinutes ?? 180) * 60000
-    );
-
     // One write per poll, not one per row. Also re-created if the day has rolled over, so a
     // process left running overnight starts a fresh day's record instead of appending to
     // yesterday's.
@@ -740,8 +731,19 @@ async function main() {
     // (minutes), so newly-due rows were not even noticed and a watchdog could not tell the
     // process from a dead one. When a pipeline is in flight, reconciliation simply waits for
     // the next poll; rows with no record are unaffected and still dispatch immediately.
+    // Tab-closing thresholds. The soft cap only ever applies to a tab we have CONFIRMED is not
+    // recording; the hard cap is the blind fallback for a machine that cannot read the stream
+    // list at all. Keeping them apart is what lets the soft cap be short without ever cutting a
+    // long call short.
+    const softMaxAgeMs = Number(config.maxCallTabMinutes ?? 90) * 60000;
+    const endedGraceMs = Number(config.callTabEndedGraceMinutes ?? 20) * 60000;
+
+    // Reading the stream list opens an extension tab, so it is asked for only when something
+    // depends on the answer: a due row with a record, a late row to settle, or a call tab that
+    // has reached the point where closing it is a live question.
+    const tabDecisionsPending = callTabs.hasPendingDecisions(endedGraceMs, softMaxAgeMs);
     let streams = null;
-    if (queuedPipelines === 0 && (dueRows.some((d) => d.record) || lateCandidates.length)) {
+    if (queuedPipelines === 0 && (dueRows.some((d) => d.record) || lateCandidates.length || tabDecisionsPending)) {
       try {
         streams = await getActiveStreams(context, config);
         consecutiveStreamReadFailures = 0;
@@ -752,6 +754,24 @@ async function main() {
         );
       }
     }
+
+    // Close tabs whose call is over. Without this every successful call leaves a tab holding a
+    // live capture for as long as the process runs - fine for an afternoon, fatal over days.
+    //
+    // Deliberately AFTER the stream read. The extension's own list is the only thing that can
+    // tell a finished call from a long one, and judging by age alone forced the cap to be set
+    // generously enough never to interrupt a Q&A - which left finished tabs open for hours.
+    callTabs.sweep({
+      isFinished: (k) => store.get(k)?.status === 'completed',
+      isRecording: (k, entry) => {
+        if (streams === null) return null; // could not check - never read as "not recording"
+        if (!entry.row) return null;
+        return streamMatchesRow(streams, entry.row);
+      },
+      softMaxAgeMs,
+      hardMaxAgeMs: Number(config.hardMaxCallTabMinutes ?? 180) * 60000,
+      endedGraceMs,
+    });
 
     // Settled here, with the stream list in hand.
     for (const { row, key, late } of lateCandidates) {

@@ -251,30 +251,118 @@ check('StateStore: expired records are pruned, fresh ones kept', () => {
 
 // ---------------------------------------------------------------- call tab lifecycle
 
-check('CallTabRegistry: closes finished calls and ages out the rest', () => {
+// A tab is only closable when we KNOW it is not recording; helper keeps the cases readable.
+function tabHarness() {
   const { CallTabRegistry } = require('../../src/callTabs');
   const closed = [];
-  const fakePage = (name) => ({
+  const page = (name) => ({
     isClosed: () => false,
     close: () => {
       closed.push(name);
       return Promise.resolve();
     },
   });
-  const reg = new CallTabRegistry({ info: () => {}, warn: () => {} });
-  reg.register('done', fakePage('done'), 'DONE 2026Q1');
-  reg.register('live', fakePage('live'), 'LIVE 2026Q1');
-  assert.strictEqual(reg.size(), 2);
+  const registry = new CallTabRegistry({ info: () => {}, warn: () => {} });
+  const sweep = (options) =>
+    registry.sweep({
+      isFinished: () => false,
+      isRecording: () => null,
+      softMaxAgeMs: 90 * 60000,
+      hardMaxAgeMs: 180 * 60000,
+      endedGraceMs: 20 * 60000,
+      ...options,
+    });
+  return { registry, closed, page, sweep };
+}
 
-  // Only the completed one closes; a huge age cap means nothing ages out.
-  reg.sweep((k) => k === 'done', 60 * 60 * 1000);
+check('CallTabRegistry: a finished call closes at once', () => {
+  const { registry, closed, page, sweep } = tabHarness();
+  registry.register('done', page('done'), 'DONE 2026Q1');
+  registry.register('live', page('live'), 'LIVE 2026Q1');
+  sweep({ isFinished: (k) => k === 'done' });
   assert.deepStrictEqual(closed, ['done']);
-  assert.strictEqual(reg.size(), 1);
+  assert.strictEqual(registry.size(), 1);
+});
 
-  // Age cap of 0 closes whatever is left, even though it is not "finished".
-  reg.sweep(() => false, -1);
-  assert.deepStrictEqual(closed.sort(), ['done', 'live']);
-  assert.strictEqual(reg.size(), 0);
+check('CallTabRegistry: a tab that is STILL RECORDING is never closed, at any age', () => {
+  // The whole point. The tab is the recording, so closing one mid-capture does not mislabel a
+  // success - it destroys it. An earnings call with a long Q&A can outlast any sensible cap,
+  // and the old age check fired regardless of what was happening inside the tab.
+  const { registry, closed, page, sweep } = tabHarness();
+  registry.register('live', page('live'), 'LIVE 2026Q1', Date.now() - 5 * 60 * 60000);
+  for (let poll = 0; poll < 5; poll++) {
+    sweep({ isRecording: () => true, softMaxAgeMs: -1, hardMaxAgeMs: -1, endedGraceMs: -1 });
+  }
+  assert.deepStrictEqual(closed, [], 'a live capture must survive every cap');
+  assert.strictEqual(registry.size(), 1);
+});
+
+check('CallTabRegistry: "could not check" is never read as "not recording"', () => {
+  // One unreadable stream list would otherwise close every open capture at once.
+  const { registry, closed, page, sweep } = tabHarness();
+  registry.register('live', page('live'), 'LIVE 2026Q1', Date.now() - 60 * 60000);
+  for (let poll = 0; poll < 5; poll++) sweep({ isRecording: () => null });
+  assert.deepStrictEqual(closed, [], 'blind polls must not close anything inside the hard cap');
+
+  // The hard cap is the fallback for a machine that can never read the list at all.
+  sweep({ isRecording: () => null, hardMaxAgeMs: -1 });
+  assert.deepStrictEqual(closed, ['live']);
+});
+
+check('CallTabRegistry: a stopped tab closes once the call is past its start, after confirmation', () => {
+  const { registry, closed, page, sweep } = tabHarness();
+  // Opened 15 minutes before a call that started 40 minutes ago.
+  registry.register('over', page('over'), 'OVER 2026Q1', Date.now() - 40 * 60000);
+
+  sweep({ isRecording: () => false });
+  assert.deepStrictEqual(closed, [], 'one observation is not enough - a blip must not kill a tab');
+
+  sweep({ isRecording: () => false });
+  assert.deepStrictEqual(closed, ['over'], 'two consecutive confirmations close it');
+});
+
+check('CallTabRegistry: a blip resets the confirmation count', () => {
+  // false, then true, then false must NOT close: only consecutive observations count.
+  const { registry, closed, page, sweep } = tabHarness();
+  registry.register('flap', page('flap'), 'FLAP 2026Q1', Date.now() - 40 * 60000);
+  sweep({ isRecording: () => false });
+  sweep({ isRecording: () => true });
+  sweep({ isRecording: () => false });
+  assert.deepStrictEqual(closed, [], 'the streak restarts after any poll that saw it recording');
+  sweep({ isRecording: () => false });
+  assert.deepStrictEqual(closed, ['flap']);
+});
+
+check('CallTabRegistry: a stopped tab for a call that has NOT started yet is left alone', () => {
+  // Captures start up to fifteen minutes early and are silent until someone speaks, so "not
+  // recording" before the call is ordinary. Closing there would throw away a correctly joined
+  // tab minutes before the call it was waiting for.
+  const { registry, closed, page, sweep } = tabHarness();
+  registry.register('early', page('early'), 'EARLY 2026Q1', Date.now() + 10 * 60000);
+  for (let poll = 0; poll < 4; poll++) sweep({ isRecording: () => false });
+  assert.deepStrictEqual(closed, [], 'a tab for a call still in the future must stay open');
+});
+
+check('CallTabRegistry: hasPendingDecisions only asks for the stream list when it matters', () => {
+  // Reading the list opens an extension tab, so it must not happen every poll for tabs that are
+  // obviously still live.
+  const { registry, page } = tabHarness();
+  registry.register('early', page('early'), 'EARLY 2026Q1', Date.now() + 30 * 60000);
+  assert.strictEqual(registry.hasPendingDecisions(20 * 60000, 90 * 60000), false);
+
+  registry.register('over', page('over'), 'OVER 2026Q1', Date.now() - 40 * 60000);
+  assert.strictEqual(registry.hasPendingDecisions(20 * 60000, 90 * 60000), true);
+});
+
+check('CallTabRegistry: a row with no scheduled time still ages out once stopped', () => {
+  // dueAt is null when the portal gave no date. The soft cap is all that is left.
+  const { registry, closed, page, sweep } = tabHarness();
+  registry.register('undated', page('undated'), 'UNDATED 2026Q1', null);
+  sweep({ isRecording: () => false });
+  sweep({ isRecording: () => false });
+  assert.deepStrictEqual(closed, [], 'inside the soft cap it stays');
+  sweep({ isRecording: () => false, softMaxAgeMs: -1 });
+  assert.deepStrictEqual(closed, ['undated']);
 });
 
 check('CallTabRegistry: re-registering a key does not leak the previous tab', () => {
