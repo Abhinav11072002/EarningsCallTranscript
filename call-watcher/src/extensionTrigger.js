@@ -311,8 +311,38 @@ const REPLAY_TITLE_PATTERN = /\breplay\b|\barchive[sd]?\b|on-?demand|\btranscrip
 // false accept costs a transcript. That reasoning was right and the implementation was not: on
 // a full day it accepted 7 pages out of 26 that had no audio at all, each recording silence and
 // reporting success. Permissive about WHICH call, strict about whether there is a call.
+// How long to keep asking whether a player has appeared before concluding there is none.
+//
+// webcasting.bizconf.cn renders its player about EIGHT seconds after the document is ready -
+// measured directly: at 3s there is no player element at all, at 8s there is a 792x446 one. The
+// probe ran once, immediately, saw nothing, and the call was refused for having no player.
+// 600036.SS and CIHKY 2026Q2 both died that way, on a page 339 people were watching.
+//
+// Only the absence is retried. A page that already has a player answers on the first look, so
+// this costs nothing on every provider that behaves.
+const PLAYER_WAIT_MS = 15000;
+const PLAYER_POLL_MS = 1500;
+
+async function probeForPlayer(page, logger) {
+  const deadline = Date.now() + PLAYER_WAIT_MS;
+  let probe = await page.evaluate(playerProbe).catch(() => null);
+  if (!probe || probe.hasPlayer) return probe;
+
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(PLAYER_POLL_MS);
+    const next = await page.evaluate(playerProbe).catch(() => null);
+    if (!next) return probe; // page went away; keep what we had
+    probe = next;
+    if (probe.hasPlayer) {
+      logger.info('The player appeared after a delay; it was not there on the first look.');
+      return probe;
+    }
+  }
+  return probe;
+}
+
 async function assertPageLooksRelevant(page, row, logger, config, dialinUrl) {
-  const probe = await page.evaluate(playerProbe).catch(() => null);
+  const probe = await probeForPlayer(page, logger);
   if (!probe) return; // cannot inspect; the other guards still apply
 
   if (REPLAY_TITLE_PATTERN.test(probe.title)) {

@@ -361,8 +361,16 @@ const SELECT_TIMEOUT_MS = 2000;
 // was filled, which is exactly the case REGISTRATION_BUTTON_PATTERN was too narrow for: an
 // "Enter event" button and a "Join the live webcast" button both matched nothing, so a
 // one-click gate was left sitting on screen and recorded.
+//
+// The first alternative is a button whose entire text is "Enter", anchored so it cannot match a
+// field label like "Enter your email address". app.webinar.net puts one in a modal over the
+// player - "The doors are open. Click the button below to enter." - and the older pattern needed
+// a word after "enter", so a bare one qualified as nothing. With no form on the page to fill,
+// the click step restricts itself to entry-worded controls, so the button was skipped and the
+// call was refused for having no player: the player was behind the modal. SY 2026Q2, four
+// attempts, on a page that was one click from working.
 const ENTRY_BUTTON_PATTERN =
-  /enter (?:the )?(?:event|webcast|call|meeting|room|here)|join (?:the )?(?:live )?(?:webcast|call|meeting|event|now)|access (?:the )?(?:webcast|event|call|live)|watch (?:the )?(?:live )?(?:webcast|stream|now)|listen (?:to )?(?:the )?(?:live )?(?:webcast|call|audio|now)|proceed (?:to )?(?:the )?(?:event|webcast|call)?/i;
+  /^\s*enter(?:\s+now)?\s*$|enter (?:the )?(?:event|webcast|call|meeting|room|here)|join (?:the )?(?:live )?(?:webcast|call|meeting|event|now)|access (?:the )?(?:webcast|event|call|live)|watch (?:the )?(?:live )?(?:webcast|stream|now)|listen (?:to )?(?:the )?(?:live )?(?:webcast|call|audio|now)|proceed (?:to )?(?:the )?(?:event|webcast|call)?/i;
 
 // Wording that marks a link as the PAST recording rather than the live call. Mirrors
 // webcastResolver.js's STALE_LINK_PATTERN: the resolver already refuses to navigate to these,

@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>So-Young International Inc. Second Quarter 2026 Earnings Conference Call</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    app.webinar.net, reproduced from the live page. SY 2026Q2 spent all four attempts here and
+    was recorded as "the page has no audio or video player" - while the player sat directly
+    behind this modal, saying "The presentation will begin shortly".
+
+    The gate is a button whose entire text is "Enter". The entry pattern required a word after
+    it - "enter the webcast", "enter the event" - so a bare one matched nothing, and with no form
+    on the page to fill, the click step restricts itself to entry-worded controls. So nothing was
+    clicked, the modal stayed up, and the player behind it was never reachable.
+
+    The two inputs are the reason the new alternative is anchored to the whole string. "Enter
+    your email address" and "Enter passcode" must never be read as an entry control; they are
+    field labels, and one of them is a gate we cannot answer at all.
+  -->
+  <div id="page">
+    <h1>So-Young International Inc. Second Quarter 2026 Earnings Conference Call</h1>
+
+    <div id="modal">
+      <p>Welcome to the webinar</p>
+      <p>The doors are open. Click the button below to enter.</p>
+      <button type="button" id="enter">Enter</button>
+    </div>
+
+    <div id="player-shell" class="main-player-container" style="width:640px;height:360px;background:#111;color:#888">
+      <span id="player-status">The presentation will begin shortly</span>
+    </div>
+    <p>Ticker: SY</p>
+  </div>
+
+  <div id="console" style="display:none">
+    <div data-incall>Webcast console</div>
+    <audio id="stream" controls></audio>
+  </div>
+
+  <script>
+    document.getElementById('enter').addEventListener('click', () => {
+      document.getElementById('modal').style.display = 'none';
+      document.getElementById('console').style.display = 'block';
+      document.getElementById('player-status').textContent = 'Live';
+    });
+  </script>
+</body>
+</html>
