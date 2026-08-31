@@ -15,7 +15,7 @@ const path = require('path');
 const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('../../src/tableWatcher');
 const { StateStore } = require('../../src/stateStore');
 const { shouldSkipAsLate, shouldReacquireNow } = require('../../src/dispatchRules');
-const { rewriteToWebcastUrl, telephoneOnlyReason } = require('../../src/providerRules');
+const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('../../src/providerRules');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow, buildShortcutCommand } = require('../../src/extensionTrigger');
@@ -1995,6 +1995,60 @@ check('the patterns that escape hazard broke actually match', () => {
     !BROWSER_ENTRY_PATTERN.test('Join from Zoom Workplace app'),
     'and the app link must never be read as the browser one'
   );
+});
+
+check('providerRules: a news aggregator is refused before a tab is opened', () => {
+  // kalkine.com.au carries nine calls in the book, and every one of its links is an ARTICLE
+  // announcing that results are coming. The page has no webcast on it: stock tickers, a
+  // "Download Free Report" lead magnet, nothing else. Verified by opening it.
+  //
+  // Refusing matters more than the missed call. The resolver follows a navigational link into
+  // kalkine.com.au/get-three-stocks, which is a lead-capture form with First Name, Last Name,
+  // Email and Mobile - so the filler fills it in and submits it. Nothing is recorded and an
+  // address goes to a stock-tips funnel, four times per call.
+  for (const url of [
+    'https://kalkine.com.au/news/announcements/accent-group-to-release-fy26-full-year-results',
+    'https://www.kalkine.com.au/get-three-stocks',
+    'https://kalkine.com/news/anything',
+  ]) {
+    const reason = notAWebcastReason(url);
+    assert.ok(reason, `${url} should be refused`);
+    assert.match(reason, /news aggregator/i);
+  }
+});
+
+check('providerRules: a real provider is not mistaken for an aggregator', () => {
+  // The two verified by hand today, plus the busiest host in the book.
+  for (const url of [
+    'https://edge.media-server.com/mmc/p/abc/',
+    'https://ccmediaframe.com/?id=SnteCPZ2',
+    'https://qcnl.tv/p/rhBRgqODy-OksC0Co0hm8A',
+    'https://event.choruscall.com/mediaframe/webcast.html?webcastid=x',
+  ]) {
+    assert.strictEqual(notAWebcastReason(url), null, `${url} must not be refused`);
+  }
+});
+
+check('providerRules: a malformed link does not throw', () => {
+  // A truncated or empty link reaches here on occasion; refusing is a judgement, not a parser.
+  for (const url of ['', null, undefined, 'not-a-url', 'https://']) {
+    assert.strictEqual(notAWebcastReason(url), null);
+  }
+});
+
+check('providerRules: Diamond Pass covers every host shape it appears under', () => {
+  // s1.c-conf.com carries twelve calls. They were already being refused, but only after four
+  // attempts had each opened a tab to discover it - and those attempts hold the pipeline lock
+  // that every other call in the window queues behind.
+  for (const url of [
+    'https://s1.c-conf.com/diamondpass/10055017-9xfr47.html',
+    'https://s2.c-conf.com/diamondpass/x.html',
+    'https://dpregister.com/DiamondPassRegistration/register?confirmationNumber=1',
+  ]) {
+    assert.ok(telephoneOnlyReason(url), `${url} should be known telephone-only`);
+  }
+  // And its webcast sibling, which does carry audio, must stay usable.
+  assert.strictEqual(telephoneOnlyReason('https://webcast.choruscall.com/webcast.html?id=x'), null);
 });
 
 // ---------------------------------------------------------------- report

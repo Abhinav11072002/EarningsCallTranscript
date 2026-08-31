@@ -8,7 +8,7 @@ const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
 const { shouldSkipAsLate, shouldReacquireNow } = require('./dispatchRules');
-const { rewriteToWebcastUrl, telephoneOnlyReason } = require('./providerRules');
+const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('./providerRules');
 const { strategyForAttempt } = require('./retryStrategy');
 const { ensurePlaying, installAudioProbe } = require('./playback');
 const { Mutex, withDeadline, runPreparedBatch } = require('./concurrency');
@@ -174,6 +174,13 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
         }
 
         // What we already know about this provider, applied before a tab is opened.
+        // Refused before a tab is opened: there is nothing to find on these, and following
+        // them submits the identity to a marketing form. See providerRules.js.
+        const notWebcast = notAWebcastReason(dialinLink);
+        if (notWebcast) {
+          throw new Error(`Refusing to record: ${notWebcast} (${dialinLink})`);
+        }
+
         const phoneOnly = telephoneOnlyReason(dialinLink);
         if (phoneOnly) {
           // Terminal rather than a retry: four attempts at a page that can never carry audio
