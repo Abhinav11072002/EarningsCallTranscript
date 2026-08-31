@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Nordwind Energi ASA Q2 2026 Results Presentation</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    A gate whose wording appears in NO pattern anywhere in this project. That is the point: it
+    stands in for the fourth phrase we have not met yet, after "Click Here to Watch Webcast",
+    "NEXT" and "Enter".
+    
+    It is recognised by SHAPE instead - a dialog-sized overlay, on top at its own centre, holding
+    exactly one clickable and no text input, over something player-shaped. Roughly half the calls
+    in the book are on providers we have never seen, spread thin across eighty-odd hosts, so
+    matching vocabulary cannot keep up with them.
+    
+    The decoys are the other half of the rule. The shape decides WHERE to look; the wording still
+    decides what is safe to touch, so the refusals that already exist must still apply.
+  -->
+  <div id="player-shell" class="main-player-container"
+       style="position:absolute;left:40px;top:120px;width:700px;height:400px;background:#111"></div>
+
+  <!-- Never clickable: outside the overlay, and wrong in every case. -->
+  <a href="zoommtg://zoom.us/join?confno=1" data-forbidden="true">Open in the desktop app</a>
+  <a href="#replay" data-forbidden="true">Se opptak</a>
+  <button type="button" data-forbidden="true">Last ned presentasjonen</button>
+
+  <div id="gate" role="dialog"
+       style="position:fixed;left:25%;top:25%;width:50%;height:40%;background:#fff;z-index:99">
+    <p>Velkommen til webcasten</p>
+    <p>Trykk under for a fortsette til sendingen.</p>
+    <button type="button" id="go">Fortsett til sendingen</button>
+  </div>
+
+  <div id="console" style="display:none">
+    <div data-incall>Webcast console</div>
+    <audio id="stream" controls></audio>
+  </div>
+
+  <script>
+    document.getElementById('go').addEventListener('click', () => {
+      document.getElementById('gate').style.display = 'none';
+      document.getElementById('console').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

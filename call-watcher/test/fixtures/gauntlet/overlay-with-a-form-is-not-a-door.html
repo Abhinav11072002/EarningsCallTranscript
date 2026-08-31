@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Meridian Holdings Q3 2026 Earnings Call</title>
+  <meta name="expect-joined" content="true">
+</head>
+<body>
+  <!--
+    The guard on the structural rule. This overlay is dialog-shaped, on top, over a player - but
+    it contains a FORM, so it belongs to the form filler and not to the shape rule. If the shape
+    rule grabbed its button first it would submit an empty registration, which is precisely the
+    failure that cost BW LNG and openbriefing their calls.
+    
+    Correct behaviour: the fields are filled, THEN the button is clicked, and we end up inside.
+  -->
+  <div class="main-player-container" style="position:absolute;left:20px;top:200px;width:700px;height:400px;background:#111"></div>
+
+  <div id="gate" role="dialog" style="position:fixed;left:20%;top:15%;width:60%;height:55%;background:#fff;z-index:99">
+    <h2>Register to attend</h2>
+    <label for="fn">First Name *</label><input type="text" id="fn" required data-expect="firstName">
+    <label for="ln">Last Name *</label><input type="text" id="ln" required data-expect="lastName">
+    <label for="em">Email *</label><input type="email" id="em" required data-expect="email">
+    <button type="button" id="go">Continue</button>
+  </div>
+
+  <div id="console" style="display:none">
+    <div data-incall>Webcast console</div>
+    <audio id="stream" controls></audio>
+  </div>
+  <p id="error" style="display:none">All fields are required.</p>
+
+  <script>
+    document.getElementById('go').addEventListener('click', () => {
+      const filled = ['fn', 'ln', 'em'].every((id) => document.getElementById(id).value.trim());
+      if (!filled) { document.getElementById('error').style.display = 'block'; return; }
+      document.getElementById('gate').style.display = 'none';
+      document.getElementById('console').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

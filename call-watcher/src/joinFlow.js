@@ -77,6 +77,122 @@ const TERMINAL_STATE_PATTERN =
 const LEGITIMATE_WAIT_PATTERN =
   /waiting for the host|host will let you in|will begin (?:shortly|soon)|has not (?:yet )?started|starts in|please wait|waiting room|standing by|hold music/i;
 
+
+// Wording that must never be clicked even when the shape is right. Mirrors the refusals the
+// form filler already applies: a recording of a past event, a control that switches the form to
+// a login view, an upsell, site furniture.
+const OVERLAY_REFUSE_PATTERN =
+  /\breplays?\b|\barchived?\b|on-?demand|\bplayback\b|already\s+regist|create\s+(?:a|an)?\s*account|sign\s*up|host\s*sign\s*in|subscrib|newsletter|cookie|privacy|download|slides?\b|transcript/i;
+
+// ---------------------------------------------------------------- the shape, not the wording
+//
+// Every gate this project has missed was missed the same way: by WORDING. "Click Here to Watch
+// Webcast" on eventsair, "NEXT" on brrmedia, "Enter" on webinar.net - three phrases, three
+// separate fixes, and the fourth is out there. Roughly half the calls in the book are on
+// providers we have never seen, spread across eighty-odd hosts with a handful of calls each, so
+// enumerating vocabulary cannot catch up.
+//
+// What those pages had in common was a SHAPE: something player-sized on the page, covered by an
+// overlay, and exactly one thing to click inside it. That is recognisable without knowing a
+// single word of the copy, and it is what this looks for.
+//
+// The conditions are deliberately narrow, because a wrong click here is expensive - a native-app
+// handler steals the foreground, a replay records the wrong event:
+//
+//   1. the overlay sits ON TOP at its own centre (elementFromPoint agrees), so a hidden or
+//      decorative div cannot qualify
+//   2. it holds EXACTLY ONE actionable control - one button is a door, three is a menu
+//   3. it holds no text input, because a form is the form filler's business, not this
+//   4. the control's wording passes every existing refusal: native app, replay, mode switch,
+//      site furniture. The shape decides WHERE to look; the wording still decides what is safe
+//   5. something player-shaped exists behind it, or the overlay is small enough to be a dialog
+//      rather than the page itself
+const OVERLAY_MIN_COVERAGE = 0.12; // of the viewport - smaller than this is a badge, not a gate
+const OVERLAY_MAX_COVERAGE = 0.98;
+
+function overlayEntryProbe() {
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+
+  const playerBehind = (() => {
+    if (document.querySelector('audio, video')) return true;
+    for (const el of document.querySelectorAll(
+      'iframe, [class*="player" i], [id*="player" i], [class*="webcast" i], [class*="stream" i], [class*="media" i]'
+    )) {
+      const r = el.getBoundingClientRect();
+      if (r.width >= 200 && r.height >= 100) return true;
+    }
+    return false;
+  })();
+
+  const candidates = [...document.querySelectorAll('div, section, aside, dialog, [role=dialog], [aria-modal="true"]')];
+  const found = [];
+
+  for (const overlay of candidates) {
+    if (!visible(overlay)) continue;
+    const rect = overlay.getBoundingClientRect();
+    const coverage = (rect.width * rect.height) / viewportArea;
+    if (coverage < OVERLAY_MIN_COVERAGE_PLACEHOLDER || coverage > OVERLAY_MAX_COVERAGE_PLACEHOLDER) continue;
+
+    // On top at its own centre. Without this, any large wrapper div qualifies.
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) continue;
+    const atPoint = document.elementFromPoint(cx, cy);
+    if (!atPoint || !(overlay === atPoint || overlay.contains(atPoint))) continue;
+
+    // A form belongs to the form filler.
+    if (overlay.querySelector('input:not([type=hidden]):not([type=button]):not([type=submit]), select, textarea')) continue;
+
+    const controls = [...overlay.querySelectorAll('button, [role=button], input[type=button], input[type=submit], a[href]')]
+      .filter(visible)
+      .filter((el) => (el.innerText || el.value || '').trim().length > 0);
+    if (controls.length !== 1) continue;
+
+    const control = controls[0];
+    const text = (control.innerText || control.value || '').replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 60) continue;
+
+    // A dialog-shaped overlay is a gate on its own; a page-sized one only counts when there is
+    // something player-shaped behind it to be gating.
+    const dialogShaped = coverage <= 0.6;
+    if (!dialogShaped && !playerBehind) continue;
+
+    found.push({ text, coverage: Number(coverage.toFixed(3)), dialogShaped, playerBehind });
+  }
+
+  // Innermost first: a modal nested inside a backdrop should win over the backdrop.
+  found.sort((a, b) => a.coverage - b.coverage);
+  return found[0] || null;
+}
+
+// Returns the single clickable inside a qualifying overlay, or null.
+async function findOverlayEntryAction(page) {
+  for (const frame of page.frames()) {
+    const source = overlayEntryProbe
+      .toString()
+      .replace('OVERLAY_MIN_COVERAGE_PLACEHOLDER', String(OVERLAY_MIN_COVERAGE))
+      .replace('OVERLAY_MAX_COVERAGE_PLACEHOLDER', String(OVERLAY_MAX_COVERAGE));
+    const candidate = await frame.evaluate(`(${source})()`).catch(() => null);
+    if (!candidate) continue;
+
+    // The shape found WHERE to look. The wording still decides whether it is safe to touch.
+    if (NATIVE_APP_PATTERN.test(candidate.text)) continue;
+    if (OVERLAY_REFUSE_PATTERN.test(candidate.text)) continue;
+
+    const handle = await frame
+      .locator('button, [role=button], input[type=button], input[type=submit], a[href]')
+      .filter({ hasText: candidate.text })
+      .first();
+    if (!(await handle.count().catch(() => 0))) continue;
+    return { kind: 'click', el: handle, text: candidate.text, why: candidate.dialogShaped ? 'a dialog with one button' : 'an overlay over the player' };
+  }
+  return null;
+}
+
 // See formFiller.js's POPUP_GRACE_MS - a click's popup fires immediately, and this wait is
 // paid on every click that opens nothing.
 const POPUP_GRACE_MS = 600;
@@ -184,7 +300,11 @@ async function describeJoinBlocker(page) {
 // tab means recording the lobby while the call plays somewhere we never look.
 async function advanceJoinFlow(page, logger) {
   for (let step = 0; step < MAX_JOIN_STEPS; step++) {
-    const action = await findBrowserEntryAction(page).catch(() => null);
+    // Wording first: an explicit "Join from your browser" is a stronger signal than any shape.
+    // The structural rule is the fallback, for the gates whose copy we have never met.
+    const action =
+      (await findBrowserEntryAction(page).catch(() => null)) ||
+      (await findOverlayEntryAction(page).catch(() => null));
     if (!action) return page;
 
     const before = page.url();
@@ -199,7 +319,7 @@ async function advanceJoinFlow(page, logger) {
         });
       if (!ok) return page;
     } else {
-      logger.info(`Entering the call via "${action.text}".`);
+      logger.info(`Entering the call via "${action.text}"${action.why ? ` (${action.why})` : ''}.`);
       // Armed BEFORE the click: a target=_blank / window.open entry point fires immediately,
       // and a popup opened while we were not listening is one we can never adopt.
       const popupPromise = page.waitForEvent('popup', { timeout: POPUP_GRACE_MS }).catch(() => null);
@@ -240,6 +360,8 @@ async function advanceJoinFlow(page, logger) {
 }
 
 module.exports = {
+  findOverlayEntryAction,
+  OVERLAY_REFUSE_PATTERN,
   advanceJoinFlow,
   describeJoinBlocker,
   TERMINAL_STATE_PATTERN,
