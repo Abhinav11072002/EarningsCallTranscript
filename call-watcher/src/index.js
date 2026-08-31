@@ -9,6 +9,7 @@ const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
 const { shouldSkipAsLate, shouldReacquireNow } = require('./dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('./providerRules');
+const { ownsRow, readShard, describeShard } = require('./shard');
 const { strategyForAttempt } = require('./retryStrategy');
 const { ensurePlaying, installAudioProbe } = require('./playback');
 const { Mutex, withDeadline, runPreparedBatch } = require('./concurrency');
@@ -454,6 +455,11 @@ async function main() {
     }
   }
   logger.info(`Portal tab URL: ${portalPage.url()}`);
+  // Read once and announced loudly. Two machines with the same index silently drop half the
+  // book, and two with different counts drop an unpredictable share - neither shows up as an
+  // error anywhere, so the startup line is the only place it can be caught by eye.
+  const shard = readShard(config);
+  logger.info(describeShard(shard));
 
   // Validated after the logger exists so the findings reach the log file, not just a terminal
   // that may be closed by the time anyone looks. Errors stop the run: every numeric setting is
@@ -560,6 +566,25 @@ async function main() {
     }
 
     pollCount++;
+
+    // Filtered HERE, before the seen log, the reconciliation, the due check or the heartbeat see
+    // anything. A row belonging to another machine must not merely be skipped - it has to be
+    // invisible, or this machine reports every one of the other machine's calls as missed and
+    // the ledger becomes unreadable.
+    //
+    // stampDueAt has not run yet at this point, so scheduledMinute() reads the countdown text via
+    // the same parser the rest of the poll uses; a row whose time cannot be read is assigned
+    // deterministically and then discarded by the window check anyway.
+    const beforeShard = rows.length;
+    if (shard.count > 1) {
+      rows = rows.map((row) => {
+        const mins = minutesUntilCall(row);
+        return mins === null ? row : stampDueAt(row, mins);
+      });
+      rows = rows.filter((row) => ownsRow(row, shard));
+    }
+    const shardedOut = beforeShard - rows.length;
+
     const withLinks = rows.filter((r) => r.dialinLink).length;
     const blindNow = rows.length === 0 || withLinks === 0;
     // Log on the first poll, periodically, and on any change into or out of a blind reading -
@@ -567,7 +592,8 @@ async function main() {
     if (pollCount === 1 || pollCount % 30 === 0 || blindNow !== lastLoggedWasBlind) {
       const recovered = lastLoggedWasBlind && !blindNow ? ' (recovered)' : '';
       logger.info(
-        `Poll #${pollCount}: watching ${rows.length} row(s), ${withLinks} with a dial-in link.${recovered}`
+        `Poll #${pollCount}: watching ${rows.length} row(s), ${withLinks} with a dial-in link` +
+          `${shard.count > 1 ? `, ${shardedOut} left to the other ${shard.count - 1} machine(s)` : ''}.${recovered}`
       );
       lastLoggedWasBlind = blindNow;
     }
@@ -716,6 +742,9 @@ async function main() {
       dueNow: dueRows.length,
       queueDepth: queuedPipelines,
       openCallTabs: callTabs.size(),
+      shardIndex: shard.index,
+      shardCount: shard.count,
+      shardedOut,
       streamReadFailures: consecutiveStreamReadFailures,
       chromeConnected: browser.isConnected(),
     });

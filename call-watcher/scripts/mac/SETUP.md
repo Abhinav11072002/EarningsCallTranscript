@@ -7,14 +7,13 @@ Written from doing it once, so every step that went wrong the first time is call
 rather than left to be rediscovered. Follow it in order — several steps depend on earlier ones
 in ways that are not obvious.
 
-> ## ⚠️ STOP — read this before setting up a SECOND machine
+> ## ⚠️ Running more than one machine
 >
-> There is no work-splitting yet. Every watcher reads the whole table and decides for itself
-> what to record, keeping its own local record of what it has claimed. **Two machines running
-> as-is will both record every call** — duplicate transcripts, and two browsers competing for
-> the same webcast.
+> Every watcher reads the whole table and decides for itself what to record, so **two machines
+> with the default configuration will both record every call** — duplicate transcripts, and two
+> browsers competing for the same webcast.
 >
-> Machine 1 is safe. Do not start machine 2 until the shard filter exists.
+> Set `shard` on each machine before starting the second one. See **step 17**.
 
 ---
 
@@ -274,6 +273,63 @@ sleep 10 && launchctl remove cw-diag && cat /tmp/cw-diag.log
 ```
 
 **Expect 3/3.** Anything else is worth fixing before trusting the machine.
+
+## 17. Splitting the calls between machines
+
+Each machine takes a fixed share of the book. Put this in `config.local.json`, **never** in
+`config.json` — that file is tracked, so a shard index committed there would overwrite the other
+machine's identity on its next `git pull`:
+
+```json
+{
+  "shard": { "index": 0, "count": 2 }
+}
+```
+
+`index` is 0-based and must differ on every machine; `count` is how many machines are running
+and must be **the same everywhere**. Omitting `shard` entirely means "take every call", which is
+what a single machine wants.
+
+The assignment depends only on the call itself — its scheduled minute and its dial-in link — and
+never on its position in the table. That is what makes coverage exactly-once with no
+coordination between the machines: no shared database, no leases, no clock sync. Interleaving by
+position instead ("machine A takes the 1st, 3rd, 5th row") is the one scheme that can both
+double-record and miss, because positions shift as calls leave the window and as the portal
+fills in a link mid-morning.
+
+A dual listing — `601939.SS` and `CICHY`, the same webcast under two symbols — shares a link and
+therefore lands on one machine, so one browser opens that page instead of two.
+
+### Check the split before trusting it
+
+```bash
+npm run shard-preview -- 2 --list
+```
+
+This prints every upcoming call with its owning machine, and the busiest 15-minute window per
+machine. That last figure is the one that decides how many machines are worth running:
+preparation runs three at a time but the extension trigger is serial, so a machine is limited by
+calls per window, not calls per day. If the unsplit peak is comfortable, more machines buy
+nothing.
+
+Run it on both machines and confirm they agree — identical output except for which rows each one
+claims.
+
+### What this does not do
+
+**There is no failover.** If a machine is down, its share is simply not recorded, and nothing
+raises an alarm about it. Watch `heartbeat.json` on every machine, or accept the gap. Failover
+needs shared state that machines can claim from, which is a different piece of work.
+
+The startup line names the machine's share, and it is the only place a misconfiguration shows up
+by eye:
+
+```
+Shard 2 of 2: this machine takes the calls assigned to index 1.
+```
+
+Two machines with the same `index` silently drop half the book. Two with different `count`
+values drop an unpredictable share. Neither looks like an error anywhere else.
 
 ## 16. The only test that counts
 

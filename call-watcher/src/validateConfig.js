@@ -33,6 +33,7 @@ const SPEC = {
   hardMaxCallTabMinutes: { type: 'int', min: 1, max: 1440 },
   callTabEndedGraceMinutes: { type: 'int', min: 0, max: 240 },
   closeTabMinutesPastCallStart: { type: 'int', min: 5, max: 480 },
+  shard: { type: 'object' },
   stateRecordTtlDays: { type: 'int', min: 1, max: 365 },
   logRetentionDays: { type: 'int', min: 1, max: 365 },
   extensionShortcutSendKeys: { type: 'string', required: true },

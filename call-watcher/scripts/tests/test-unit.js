@@ -16,6 +16,7 @@ const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRe
 const { StateStore } = require('../../src/stateStore');
 const { shouldSkipAsLate, shouldReacquireNow } = require('../../src/dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('../../src/providerRules');
+const { shardIndexFor, ownsRow, readShard, describeShard } = require('../../src/shard');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow, buildShortcutCommand } = require('../../src/extensionTrigger');
@@ -2049,6 +2050,103 @@ check('providerRules: Diamond Pass covers every host shape it appears under', ()
   }
   // And its webcast sibling, which does carry audio, must stay usable.
   assert.strictEqual(telephoneOnlyReason('https://webcast.choruscall.com/webcast.html?id=x'), null);
+});
+
+// ---------------------------------------------------------------- sharding
+const at = (h, m) => new Date(2026, 8, 3, h, m).getTime();
+const callRow = (symbol, hour, minute, link) => ({
+  symbol,
+  fiscalPeriod: '2026Q2',
+  dialinLink: link || `https://edge.media-server.com/mmc/p/${symbol.toLowerCase()}/`,
+  dueAt: at(hour, minute),
+});
+
+check('shard: with one machine, every call is owned', () => {
+  const shard = readShard({});
+  assert.strictEqual(shard.count, 1);
+  for (const row of [callRow('AAPL', 9, 0), callRow('MSFT', 9, 0), callRow('BP.L', 14, 30)]) {
+    assert.strictEqual(ownsRow(row, shard), true);
+  }
+});
+
+check('shard: every call is owned by exactly one machine, at any count', () => {
+  // The property the whole design rests on. No coordination between machines means coverage has
+  // to fall out of arithmetic: miss it and calls are dropped or recorded twice, silently.
+  const rows = [];
+  for (let hour = 6; hour < 23; hour++) {
+    for (const symbol of ['AAPL', 'MSFT', '601939.SS', 'CICHY', 'BP.L', 'CM.TO', 'ZIP.AX']) {
+      rows.push(callRow(symbol, hour, (hour * 7) % 60));
+    }
+  }
+  for (const count of [1, 2, 3, 4, 7]) {
+    for (const row of rows) {
+      const owners = [];
+      for (let index = 0; index < count; index++) {
+        if (ownsRow(row, { index, count })) owners.push(index);
+      }
+      assert.strictEqual(owners.length, 1, `${row.symbol} at count ${count} owned by ${owners.length} machines`);
+    }
+  }
+});
+
+check('shard: the owner does not change when OTHER rows come and go', () => {
+  // Interleaving by list position - machine A takes the 1st, 3rd, 5th row - is the scheme that
+  // can both double-record and miss, because positions shift as calls leave the window and as
+  // the portal fills in a link mid-morning. A call that was 3rd becomes 2nd and changes owner.
+  // Nothing here may depend on the shape of the list.
+  const target = callRow('MSFT', 9, 30);
+  const owner = shardIndexFor(target, 2);
+  for (const others of [[], [callRow('AAPL', 8, 0)], [callRow('AAPL', 8, 0), callRow('BP.L', 9, 0)]]) {
+    const list = [...others, target, ...others];
+    for (const row of list) shardIndexFor(row, 2); // order of evaluation must not matter either
+    assert.strictEqual(shardIndexFor(target, 2), owner, 'the owner must depend only on the call');
+  }
+});
+
+check('shard: a dual listing lands on one machine', () => {
+  // 601939.SS and CICHY are the same webcast under two symbols, same link, same minute. Keying
+  // on the link keeps them together, so one browser opens that page instead of two machines
+  // opening it at the same moment.
+  const link = 'https://webcasting.bizconf.cn/live/watch/general/o0pg36rl';
+  const a = callRow('601939.SS', 21, 0, link);
+  const b = callRow('CICHY', 21, 0, link);
+  for (const count of [2, 3, 7]) {
+    assert.strictEqual(shardIndexFor(a, count), shardIndexFor(b, count), `split at count ${count}`);
+  }
+});
+
+check('shard: a same-minute burst is spread across machines', () => {
+  // Calls cluster on the hour, so the minute alone would put a whole burst on one machine and
+  // defeat the point. Different links in the same minute must not all collide.
+  const owners = new Set();
+  for (const symbol of ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META', 'TSLA', 'NVDA', 'NFLX']) {
+    owners.add(shardIndexFor(callRow(symbol, 21, 0), 2));
+  }
+  assert.strictEqual(owners.size, 2, 'a burst of eight at the same minute must reach both machines');
+});
+
+check('shard: a row with no scheduled time is still assigned deterministically', () => {
+  // It will be discarded by the window check anyway, but two machines must not disagree about it
+  // in a log.
+  const row = { symbol: 'ECOR.L', fiscalPeriod: '2026Q2', dialinLink: 'https://x/y' };
+  const first = shardIndexFor(row, 3);
+  assert.strictEqual(shardIndexFor(row, 3), first);
+  assert.ok(first >= 0 && first < 3);
+});
+
+check('shard: a misconfigured pair of machines is refused, not guessed at', () => {
+  // The one mistake that silently drops calls: two machines with the same index take the same
+  // half and nobody takes the rest, and nothing about it looks like an error.
+  assert.throws(() => readShard({ shard: { index: 2, count: 2 } }), /between 0 and 1/);
+  assert.throws(() => readShard({ shard: { index: -1, count: 2 } }), /between 0 and 1/);
+  assert.throws(() => readShard({ shard: { index: 0, count: 0 } }), /1 or more/);
+  assert.throws(() => readShard({ shard: { index: 0, count: 1.5 } }), /whole number/);
+  assert.throws(() => readShard({ shard: { index: 'a', count: 2 } }), /shard.index/);
+});
+
+check('shard: the description names the machine in human terms', () => {
+  assert.match(describeShard(readShard({})), /off/i);
+  assert.match(describeShard(readShard({ shard: { index: 1, count: 3 } })), /Shard 2 of 3/);
 });
 
 // ---------------------------------------------------------------- report
