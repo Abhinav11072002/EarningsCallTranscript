@@ -2103,6 +2103,26 @@ check('shard: the owner does not change when OTHER rows come and go', () => {
   }
 });
 
+check('shard: the owner does not depend on the clock in any way', () => {
+  // The bug this exists to prevent, caught on two live machines before either started.
+  //
+  // The first version added the call's scheduled minute to spread same-minute bursts. dueAt is
+  // RECONSTRUCTED from the portal's countdown text plus the current time, so two machines
+  // polling a second apart landed on 659 and 660 - and every single owner flipped. Machine 6
+  // and machine 7 would each have recorded the other's entire share.
+  //
+  // Same call, wildly different dueAt, and no dueAt at all: one answer.
+  const link = 'https://event.choruscall.com/mediaframe/webcast.html?id=abc';
+  const base = { symbol: 'SLHN.SW', fiscalPeriod: '2026Q2', dialinLink: link };
+  const owners = new Set([
+    shardIndexFor({ ...base, dueAt: new Date(2026, 8, 1, 6, 59, 58).getTime() }, 2),
+    shardIndexFor({ ...base, dueAt: new Date(2026, 8, 1, 7, 0, 2).getTime() }, 2),
+    shardIndexFor({ ...base, dueAt: new Date(2027, 0, 1, 23, 59).getTime() }, 2),
+    shardIndexFor(base, 2),
+  ]);
+  assert.strictEqual(owners.size, 1, 'the clock must not change who owns a call');
+});
+
 check('shard: a dual listing lands on one machine', () => {
   // 601939.SS and CICHY are the same webcast under two symbols, same link, same minute. Keying
   // on the link keeps them together, so one browser opens that page instead of two machines
@@ -2116,8 +2136,8 @@ check('shard: a dual listing lands on one machine', () => {
 });
 
 check('shard: a same-minute burst is spread across machines', () => {
-  // Calls cluster on the hour, so the minute alone would put a whole burst on one machine and
-  // defeat the point. Different links in the same minute must not all collide.
+  // Calls cluster on the hour, so a burst must not land on one machine. Different events have
+  // different links, which is what spreads them.
   const owners = new Set();
   for (const symbol of ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META', 'TSLA', 'NVDA', 'NFLX']) {
     owners.add(shardIndexFor(callRow(symbol, 21, 0), 2));

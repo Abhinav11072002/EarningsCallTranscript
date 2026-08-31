@@ -14,26 +14,13 @@
 // hand: given a call, anyone can work out which machine should take it, and
 // `npm run shard-preview` prints the whole book with its owners before a single call runs.
 
-// Calls cluster on the hour and the half hour, so the minute alone would put a whole burst on
-// one machine. Mixing in the identity spreads a same-minute cluster across the machines while
-// keeping the answer fixed per call.
+// The whole rule. Deliberately not a real hash: a sum of character codes stays checkable by
+// hand, so anyone can work out which machine owns a call with a calculator.
 function charSum(value) {
   let total = 0;
   const text = String(value || '');
   for (let i = 0; i < text.length; i++) total += text.charCodeAt(i);
   return total;
-}
-
-// Local minutes since midnight for the call's scheduled time, or null when it has none.
-//
-// Local, deliberately: every machine watching this table is in the same office and the same
-// timezone, and a local figure is the one a person can check against the portal's own column.
-function scheduledMinute(row) {
-  if (typeof row.dueAt === 'number' && Number.isFinite(row.dueAt)) {
-    const when = new Date(row.dueAt);
-    return when.getHours() * 60 + when.getMinutes();
-  }
-  return null;
 }
 
 // What identifies the EVENT rather than the row.
@@ -51,15 +38,20 @@ function shardKeyFor(row) {
 
 // The owning machine index, 0-based. Always 0 when sharding is off, so a single machine keeps
 // every call and nothing changes for an existing install.
+// NOTHING derived from the clock may appear here.
+//
+// The first version added the call's scheduled minute, to spread a same-minute burst. That
+// minute is RECONSTRUCTED from the portal's countdown text plus the current time, so two
+// machines polling a second apart land on different minutes - 659 against 660 - and every
+// owner flips. Both machines would then have recorded the other's entire share. Caught by
+// running shard-preview on both machines and comparing, which is why that command exists.
+//
+// The link alone is enough to spread a burst anyway: calls in the same minute are different
+// events with different links, so their sums differ.
 function shardIndexFor(row, count) {
   const machines = Number(count) || 1;
   if (machines <= 1) return 0;
-  const minute = scheduledMinute(row);
-  // A row with no scheduled time is never dispatched anyway - it cannot be judged against the
-  // 15-minute window - so where it lands does not matter. Keeping it deterministic avoids two
-  // machines disagreeing about it in a log.
-  const base = minute === null ? 0 : minute;
-  return (base + charSum(shardKeyFor(row))) % machines;
+  return charSum(shardKeyFor(row)) % machines;
 }
 
 // Does this machine own the call?
@@ -92,4 +84,4 @@ function describeShard(shard) {
   return `Shard ${shard.index + 1} of ${shard.count}: this machine takes the calls assigned to index ${shard.index}.`;
 }
 
-module.exports = { shardIndexFor, ownsRow, readShard, describeShard, shardKeyFor, scheduledMinute, charSum };
+module.exports = { shardIndexFor, ownsRow, readShard, describeShard, shardKeyFor, charSum };

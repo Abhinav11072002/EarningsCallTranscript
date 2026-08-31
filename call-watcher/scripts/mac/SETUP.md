@@ -290,8 +290,14 @@ machine's identity on its next `git pull`:
 and must be **the same everywhere**. Omitting `shard` entirely means "take every call", which is
 what a single machine wants.
 
-The assignment depends only on the call itself — its scheduled minute and its dial-in link — and
-never on its position in the table. That is what makes coverage exactly-once with no
+The assignment depends only on the call's **dial-in link** — nothing else, and in particular
+nothing derived from the clock. The first version mixed in the call's scheduled minute, which is
+reconstructed from the portal's countdown plus the current time: two machines polling a second
+apart landed on different minutes and **every owner flipped**, so each would have recorded the
+other's entire share. It never reached production because the preview below was run on both
+machines and compared. Do that every time you change the split.
+
+The assignment never depends on the row's position in the table either. That is what makes coverage exactly-once with no
 coordination between the machines: no shared database, no leases, no clock sync. Interleaving by
 position instead ("machine A takes the 1st, 3rd, 5th row") is the one scheme that can both
 double-record and miss, because positions shift as calls leave the window and as the portal

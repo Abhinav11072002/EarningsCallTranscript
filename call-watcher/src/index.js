@@ -572,17 +572,10 @@ async function main() {
     // invisible, or this machine reports every one of the other machine's calls as missed and
     // the ledger becomes unreadable.
     //
-    // stampDueAt has not run yet at this point, so scheduledMinute() reads the countdown text via
-    // the same parser the rest of the poll uses; a row whose time cannot be read is assigned
-    // deterministically and then discarded by the window check anyway.
+    // The assignment reads nothing but the row's dial-in link, so it needs no clock and no
+    // parsing - see shard.js for why anything time-derived cannot be used here.
     const beforeShard = rows.length;
-    if (shard.count > 1) {
-      rows = rows.map((row) => {
-        const mins = minutesUntilCall(row);
-        return mins === null ? row : stampDueAt(row, mins);
-      });
-      rows = rows.filter((row) => ownsRow(row, shard));
-    }
+    if (shard.count > 1) rows = rows.filter((row) => ownsRow(row, shard));
     const shardedOut = beforeShard - rows.length;
 
     const withLinks = rows.filter((r) => r.dialinLink).length;
