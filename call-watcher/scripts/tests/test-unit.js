@@ -2057,6 +2057,7 @@ const at = (h, m) => new Date(2026, 8, 3, h, m).getTime();
 const callRow = (symbol, hour, minute, link) => ({
   symbol,
   fiscalPeriod: '2026Q2',
+  earningsDate: '2026-09-03',
   dialinLink: link || `https://edge.media-server.com/mmc/p/${symbol.toLowerCase()}/`,
   dueAt: at(hour, minute),
 });
@@ -2123,21 +2124,36 @@ check('shard: the owner does not depend on the clock in any way', () => {
   assert.strictEqual(owners.size, 1, 'the clock must not change who owns a call');
 });
 
-check('shard: a dual listing lands on one machine', () => {
-  // 601939.SS and CICHY are the same webcast under two symbols, same link, same minute. Keying
-  // on the link keeps them together, so one browser opens that page instead of two machines
-  // opening it at the same moment.
-  const link = 'https://webcasting.bizconf.cn/live/watch/general/o0pg36rl';
-  const a = callRow('601939.SS', 21, 0, link);
-  const b = callRow('CICHY', 21, 0, link);
-  for (const count of [2, 3, 7]) {
-    assert.strictEqual(shardIndexFor(a, count), shardIndexFor(b, count), `split at count ${count}`);
+check('shard: the owner survives the portal changing a link', () => {
+  // The second bug this rule had, caught the same way - by comparing the preview across both
+  // machines. CANG 2026Q2 read as ir.cangoonline.com on one and event.choruscall.com on the
+  // other, because the portal updated its link between the two reads, and the owner flipped.
+  //
+  // Everything about a row can change while the day runs except the call's identity, so the key
+  // is symbol + fiscal period + earnings date - the same key the state store dedupes on.
+  const call = { symbol: 'CANG', fiscalPeriod: '2026Q2', earningsDate: '2026-09-01' };
+  const owners = new Set([
+    shardIndexFor({ ...call, dialinLink: 'https://ir.cangoonline.com/news-events/x' }, 2),
+    shardIndexFor({ ...call, dialinLink: 'https://event.choruscall.com/mediaframe/y' }, 2),
+    shardIndexFor({ ...call, dialinLink: '-' }, 2),
+    shardIndexFor(call, 2),
+  ]);
+  assert.strictEqual(owners.size, 1, 'a link change must not move a call to another machine');
+});
+
+check('shard: the same symbol in different quarters can land on different machines', () => {
+  // The key includes the period and the date, so each call is assigned on its own rather than
+  // every quarter of a symbol piling onto one machine.
+  const owners = new Set();
+  for (const period of ['2026Q1', '2026Q2', '2026Q3', '2026Q4', '2027Q1', '2027Q2']) {
+    owners.add(shardIndexFor({ symbol: 'AAPL', fiscalPeriod: period, earningsDate: '2026-09-03' }, 2));
   }
+  assert.strictEqual(owners.size, 2, 'quarters of one symbol should not all share a machine');
 });
 
 check('shard: a same-minute burst is spread across machines', () => {
-  // Calls cluster on the hour, so a burst must not land on one machine. Different events have
-  // different links, which is what spreads them.
+  // Calls cluster on the hour, so a burst must not land on one machine. Different calls have
+  // different identities, which is what spreads them.
   const owners = new Set();
   for (const symbol of ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'META', 'TSLA', 'NVDA', 'NFLX']) {
     owners.add(shardIndexFor(callRow(symbol, 21, 0), 2));

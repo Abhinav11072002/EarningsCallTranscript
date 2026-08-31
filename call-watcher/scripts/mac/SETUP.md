@@ -290,21 +290,27 @@ machine's identity on its next `git pull`:
 and must be **the same everywhere**. Omitting `shard` entirely means "take every call", which is
 what a single machine wants.
 
-The assignment depends only on the call's **dial-in link** — nothing else, and in particular
-nothing derived from the clock. The first version mixed in the call's scheduled minute, which is
-reconstructed from the portal's countdown plus the current time: two machines polling a second
-apart landed on different minutes and **every owner flipped**, so each would have recorded the
-other's entire share. It never reached production because the preview below was run on both
-machines and compared. Do that every time you change the split.
+The assignment depends only on the call's **identity** — symbol, fiscal period and earnings
+date, the same key the state store dedupes on. Those three cannot change. Everything else about
+a row can, and two earlier versions of this rule were wrong for exactly that reason, both caught
+by running the preview on both machines and comparing:
 
-The assignment never depends on the row's position in the table either. That is what makes coverage exactly-once with no
+| Key tried | Why it failed |
+| --- | --- |
+| Scheduled minute | Reconstructed from the countdown plus the current time, so two machines polling a second apart landed on different minutes and **every owner flipped** |
+| Dial-in link | The portal edits links during the day. `CANG 2026Q2` read as `ir.cangoonline.com` on one machine and `event.choruscall.com` on the other, so its owner moved |
+
+A mutable key means a call changes machine the moment the portal is edited — recorded twice if
+one machine has already taken it, or by nobody. **Compare the preview across both machines every
+time you change the split**; no single-machine test can detect two boxes disagreeing.
+
+A dual listing — `601939.SS` and `CICHY` — has two different symbols and so may land on
+different machines. That is fine: each row is its own call with its own transcript, so both are
+recorded either way, and two machines do it in parallel rather than one doing it twice. That is what makes coverage exactly-once with no
 coordination between the machines: no shared database, no leases, no clock sync. Interleaving by
 position instead ("machine A takes the 1st, 3rd, 5th row") is the one scheme that can both
 double-record and miss, because positions shift as calls leave the window and as the portal
 fills in a link mid-morning.
-
-A dual listing — `601939.SS` and `CICHY`, the same webcast under two symbols — shares a link and
-therefore lands on one machine, so one browser opens that page instead of two.
 
 ### Check the split before trusting it
 

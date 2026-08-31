@@ -13,6 +13,7 @@
 // The rule is a sum of character codes rather than a real hash so that it stays checkable by
 // hand: given a call, anyone can work out which machine should take it, and
 // `npm run shard-preview` prints the whole book with its owners before a single call runs.
+const { rowKey } = require('./tableWatcher');
 
 // The whole rule. Deliberately not a real hash: a sum of character codes stays checkable by
 // hand, so anyone can work out which machine owns a call with a calculator.
@@ -23,17 +24,23 @@ function charSum(value) {
   return total;
 }
 
-// What identifies the EVENT rather than the row.
+// The call's identity - symbol, fiscal period, earnings date - and nothing else.
 //
-// A dual listing is the same webcast under two symbols - 601939.SS and CICHY, CM and CM.TO,
-// ECOR.L and ECOR.TO - carrying the same dial-in link at the same time. Keying on the link puts
-// both rows on one machine, so one browser opens that page instead of two opening it at once.
-// Falling back to the symbol keeps a row with no link usable rather than lumping every such row
-// onto machine 0.
+// This is the same key the state store dedupes on, and the point is that all three are
+// IMMUTABLE for a given call. Everything else about a row can change while the day runs.
+//
+// The dial-in link was the obvious choice and was wrong, caught by comparing the preview across
+// both machines: CANG 2026Q2 read as ir.cangoonline.com on one and event.choruscall.com on the
+// other, because the portal updated the link between the two reads. A mutable key means a call
+// changes owner the moment the portal is edited - recorded twice if one machine has already
+// taken it, or by nobody.
+//
+// A dual listing therefore no longer lands on one machine: 601939.SS and CICHY have different
+// symbols, so they can split. That is fine and slightly better - each row is its own call with
+// its own transcript, so both are recorded either way, and two machines do it in parallel
+// instead of one doing it twice in sequence.
 function shardKeyFor(row) {
-  const link = String(row.dialinLink || '').trim();
-  if (link && link !== '-') return link;
-  return `${row.symbol || ''}|${row.fiscalPeriod || ''}`;
+  return rowKey(row);
 }
 
 // The owning machine index, 0-based. Always 0 when sharding is off, so a single machine keeps
