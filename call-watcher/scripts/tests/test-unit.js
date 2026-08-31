@@ -270,6 +270,7 @@ function tabHarness() {
       softMaxAgeMs: 90 * 60000,
       hardMaxAgeMs: 180 * 60000,
       endedGraceMs: 20 * 60000,
+      pastStartMaxMs: 90 * 60000,
       ...options,
     });
   return { registry, closed, page, sweep };
@@ -289,11 +290,13 @@ check('CallTabRegistry: a tab that is STILL RECORDING is never closed, at any ag
   // success - it destroys it. An earnings call with a long Q&A can outlast any sensible cap,
   // and the old age check fired regardless of what was happening inside the tab.
   const { registry, closed, page, sweep } = tabHarness();
-  registry.register('live', page('live'), 'LIVE 2026Q1', Date.now() - 5 * 60 * 60000);
+  // Forty minutes into the call: well inside the ninety-minute limit below, so the only things
+  // that could close it here are the age caps - and they must not.
+  registry.register('live', page('live'), 'LIVE 2026Q1', Date.now() - 40 * 60000);
   for (let poll = 0; poll < 5; poll++) {
     sweep({ isRecording: () => true, softMaxAgeMs: -1, hardMaxAgeMs: -1, endedGraceMs: -1 });
   }
-  assert.deepStrictEqual(closed, [], 'a live capture must survive every cap');
+  assert.deepStrictEqual(closed, [], 'a live capture must survive every age cap');
   assert.strictEqual(registry.size(), 1);
 });
 
@@ -363,6 +366,45 @@ check('CallTabRegistry: a row with no scheduled time still ages out once stopped
   assert.deepStrictEqual(closed, [], 'inside the soft cap it stays');
   sweep({ isRecording: () => false, softMaxAgeMs: -1 });
   assert.deepStrictEqual(closed, ['undated']);
+});
+
+check('CallTabRegistry: a tab is closed 90 minutes past the call start even mid-recording', () => {
+  // The one rule that outranks "never interrupt a capture". An earnings call does not run
+  // ninety minutes past its scheduled start, so a tab still capturing then is recording
+  // something else - a lobby, a replay loop, a page whose audio never stopped - and it holds
+  // the whole call's chunks in memory for as long as the process lives.
+  const { registry, closed, page, sweep } = tabHarness();
+  registry.register('marathon', page('marathon'), 'LONG 2026Q1', Date.now() - 95 * 60000);
+  sweep({ isRecording: () => true });
+  assert.deepStrictEqual(closed, ['marathon'], 'the hard limit applies even while recording');
+});
+
+check('CallTabRegistry: the hard limit is measured from the CALL, not from the tab', () => {
+  // Tabs open up to fifteen minutes early, and that head start must not eat the allowance.
+  const { registry, closed, page, sweep } = tabHarness();
+  // Opened 100 minutes ago for a call that started 85 minutes ago: inside the limit.
+  const entry = registry.tabs;
+  registry.register('early-open', page('early-open'), 'EARLY 2026Q1', Date.now() - 85 * 60000);
+  entry.get('early-open').openedAt = Date.now() - 100 * 60000;
+  sweep({ isRecording: () => true });
+  assert.deepStrictEqual(closed, [], '85 minutes into the call is still inside the limit');
+});
+
+check('CallTabRegistry: an undated row is untouched by the hard limit', () => {
+  // dueAt is null when the portal gave no time. There is no call start to measure from, so the
+  // age caps are all that apply - and a live capture is still never interrupted by those.
+  const { registry, closed, page, sweep } = tabHarness();
+  registry.register('undated', page('undated'), 'UNDATED 2026Q1', null);
+  for (let poll = 0; poll < 3; poll++) sweep({ isRecording: () => true, pastStartMaxMs: -1 });
+  assert.deepStrictEqual(closed, [], 'with no scheduled time the hard limit cannot fire');
+});
+
+check('CallTabRegistry: hasExpiredByCallStart spots a tab past the hard limit', () => {
+  const { registry, page } = tabHarness();
+  registry.register('fresh', page('fresh'), 'FRESH 2026Q1', Date.now() - 10 * 60000);
+  assert.strictEqual(registry.hasExpiredByCallStart(90 * 60000), false);
+  registry.register('stale', page('stale'), 'STALE 2026Q1', Date.now() - 95 * 60000);
+  assert.strictEqual(registry.hasExpiredByCallStart(90 * 60000), true);
 });
 
 check('CallTabRegistry: re-registering a key does not leak the previous tab', () => {

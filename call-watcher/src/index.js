@@ -737,6 +737,8 @@ async function main() {
     // long call short.
     const softMaxAgeMs = Number(config.maxCallTabMinutes ?? 90) * 60000;
     const endedGraceMs = Number(config.callTabEndedGraceMinutes ?? 20) * 60000;
+    // Measured from the call's start, and it closes a tab even mid-capture. See callTabs.js.
+    const pastStartMaxMs = Number(config.closeTabMinutesPastCallStart ?? 90) * 60000;
 
     // Reading the stream list opens an extension tab, so it is asked for only when something
     // depends on the answer: a due row with a record, a late row to settle, or a call tab that
@@ -771,6 +773,7 @@ async function main() {
       softMaxAgeMs,
       hardMaxAgeMs: Number(config.hardMaxCallTabMinutes ?? 180) * 60000,
       endedGraceMs,
+      pastStartMaxMs,
     });
 
     // Settled here, with the stream list in hand.

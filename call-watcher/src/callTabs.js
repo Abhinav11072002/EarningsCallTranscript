@@ -65,6 +65,16 @@ class CallTabRegistry {
     return false;
   }
 
+  // Tabs past the hard limit are closed whatever the stream list says, so this needs no read.
+  // Kept separate from sweep() only so the poll can act on it even when it is blind.
+  hasExpiredByCallStart(pastStartMaxMs) {
+    const now = Date.now();
+    for (const entry of this.tabs.values()) {
+      if (entry.dueAt !== null && now > entry.dueAt + pastStartMaxMs) return true;
+    }
+    return false;
+  }
+
   // Called every poll.
   //
   //   isFinished(key)          the record says this call reached a terminal state
@@ -72,7 +82,15 @@ class CallTabRegistry {
   //
   // The three-way answer is the whole safety story. "We could not check" must never be treated
   // as "it is not recording", or one unreadable stream list kills every live capture at once.
-  sweep({ isFinished, isRecording, softMaxAgeMs, hardMaxAgeMs, endedGraceMs, confirmations = DEFAULT_CONFIRMATIONS }) {
+  sweep({
+    isFinished,
+    isRecording,
+    softMaxAgeMs,
+    hardMaxAgeMs,
+    endedGraceMs,
+    pastStartMaxMs,
+    confirmations = DEFAULT_CONFIRMATIONS,
+  }) {
     const now = Date.now();
 
     for (const [key, entry] of [...this.tabs]) {
@@ -83,6 +101,28 @@ class CallTabRegistry {
 
       if (isFinished(key)) {
         this._close(key, entry, 'call finished');
+        continue;
+      }
+
+      // The one rule that outranks "never interrupt a recording", and the only one that can.
+      //
+      // An earnings call does not run ninety minutes past its scheduled start. A tab that is
+      // still capturing at that point is not a long call, it is a tab left recording something
+      // else - a lobby, a replay loop, a page whose audio never stopped - and holding it costs
+      // the whole call's audio chunks in memory for as long as the process lives.
+      //
+      // It is deliberately measured from the CALL's start rather than from when the tab opened,
+      // because tabs open up to fifteen minutes early and that offset should not eat into the
+      // allowance. Logged loudly, since this is the only path that can end a live capture: if it
+      // ever fires on a genuine call, the log is where that will be visible.
+      if (entry.dueAt !== null && pastStartMaxMs !== undefined && now > entry.dueAt + pastStartMaxMs) {
+        const pastMin = Math.round((now - entry.dueAt) / 60000);
+        this._close(
+          key,
+          entry,
+          `the call started ${pastMin} min ago, past the ${Math.round(pastStartMaxMs / 60000)} min limit` +
+            (isRecording(key, entry) === true ? ' - it was STILL RECORDING, which no real call should be' : '')
+        );
         continue;
       }
 

@@ -16,6 +16,7 @@
   "maxCallTabMinutes": 90,
   "hardMaxCallTabMinutes": 180,
   "callTabEndedGraceMinutes": 20,
+  "closeTabMinutesPastCallStart": 90,
   "stateRecordTtlDays": 7,
   "logRetentionDays": 14,
   "extensionShortcutSendKeys": "^+y",
