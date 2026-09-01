@@ -22,6 +22,3 @@ data/watcher.lock
 
 # Ad-hoc diagnostic scratch files
 *.tmp.js
-
-# macOS Finder droppings
-.DS_Store

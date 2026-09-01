@@ -1,1 +1,4 @@
 .claude/
+
+# macOS Finder droppings, at any depth
+.DS_Store
