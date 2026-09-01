@@ -380,14 +380,16 @@ It prints the addresses it is listening on. Open it from any machine on the same
 http://<this-mac-ip>:8477
 ```
 
-To have it up whenever the machine is on, install its own Launch Agent:
+Started that way it dies with the terminal. To have it up whenever the machine is on, install its
+own Launch Agent - one command, which fills in the paths and the node location for you and prints
+the resulting state:
 
 ```bash
-cp scripts/mac/com.fmp.calldashboard.plist ~/Library/LaunchAgents/
-# replace USERNAME inside the plist first
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.fmp.calldashboard.plist
-launchctl print gui/$(id -u)/com.fmp.calldashboard | grep -E "state|pid"
+bash scripts/mac/install-dashboard-agent.sh
 ```
+
+Safe to re-run: it replaces the agent rather than adding a second one. The template it generates
+from is `scripts/mac/com.fmp.calldashboard.plist`, kept for reference.
 
 Restart it after a `git pull` the same way as the watcher:
 
