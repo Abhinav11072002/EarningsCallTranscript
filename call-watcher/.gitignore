@@ -15,9 +15,13 @@ test/fixtures/captured/
 # Runtime artifacts: per-day logs, the outcomes ledger, the heartbeat and the dedupe/retry
 # state. All machine- and run-specific; regenerated automatically.
 data/heartbeat.json
+data/upcoming.json
 data/outcomes-*.jsonl
 data/seen-*.json
 data/watcher.lock
 
 # Ad-hoc diagnostic scratch files
 *.tmp.js
+
+# macOS Finder droppings
+.DS_Store
