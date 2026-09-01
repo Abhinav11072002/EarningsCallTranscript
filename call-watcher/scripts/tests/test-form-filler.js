@@ -32,10 +32,17 @@ const logger = {
   warn: (message) => console.log('[WARN]', message),
 };
 
+// The confirmation must be VISIBLE, not merely present in the DOM. Every fixture keeps its
+// confirmation in a `<p hidden>` that its submit handler reveals, and `count()` matches hidden
+// elements - so this returned true before a single button had been pressed, on every fixture,
+// which made the one assertion that proves submission vacuous. Caught by a fixture that was
+// filled correctly and never submitted, and passed.
 async function fixtureSucceeded(page) {
+  const wording = /Registration complete|Registration completed|Thank you for registering|Registered for conference/;
   for (const frame of page.frames()) {
-    if (await frame.getByText(/Registration complete|Registration completed|Thank you for registering|Registered for conference/).count()) {
-      return true;
+    const matches = await frame.getByText(wording).all().catch(() => []);
+    for (const match of matches) {
+      if (await match.isVisible().catch(() => false)) return true;
     }
   }
   return false;

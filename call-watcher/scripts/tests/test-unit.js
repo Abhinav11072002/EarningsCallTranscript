@@ -14,7 +14,7 @@ const path = require('path');
 
 const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('../../src/tableWatcher');
 const { StateStore } = require('../../src/stateStore');
-const { shouldSkipAsLate, shouldReacquireNow } = require('../../src/dispatchRules');
+const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor } = require('../../src/dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('../../src/providerRules');
 const { shardIndexFor, ownsRow, readShard, describeShard } = require('../../src/shard');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
@@ -2052,38 +2052,73 @@ check('providerRules: Diamond Pass covers every host shape it appears under', ()
   assert.strictEqual(telephoneOnlyReason('https://webcast.choruscall.com/webcast.html?id=x'), null);
 });
 
-check('relevance: an emailed join link is named as such, not reported as a missing player', () => {
-  // SLHN.SW / SWSDF 2026Q2, live page text. Four attempts each, all reported "no player", which
-  // reads as a fault in this code. It is not one: the registration succeeded and Chorus Call
-  // emailed the link to the dummy identity.
-  const verdict = judgeRelevance({
-    title: 'Thank You! | Swiss Life Presentation of the Half Year results 2026',
-    url: 'https://event.choruscall.com/mediaframe/thankYou?webcastid=Uuzx0erS',
-    text: 'Thank you for registering. You will receive a confirmation email with additional information about this event.',
-    hasPlayer: false,
-    symbol: 'SLHN',
-    year: '2026',
-    period: 'Q2',
-    dialinUrl: 'https://event.choruscall.com/mediaframe/webcast.html?webcastid=Uuzx0erS',
-  });
-  assert.strictEqual(verdict.accepted, false);
-  assert.match(verdict.reason, /will EMAIL the join link/);
+// -------------------------------------------------- start-aware retry schedule
+check('retry: the old schedule spent every attempt before the call opened', () => {
+  // The failure this exists to prevent, reconstructed. SLHN.SW 2026Q2: dispatched at T-15 for an
+  // 07:00 call, four attempts between 06:45:39 and 06:51:18, none of them while the call was on
+  // air. Filling the very same form after the event opened produced a playing video.
+  const MIN = 60 * 1000;
+  let elapsed = 0;
+  const oldSchedule = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const delay = Math.min(30000 * 2 ** (attempt - 1), 10 * 60 * 1000);
+    elapsed += delay;
+    oldSchedule.push(elapsed);
+  }
+  // Last attempt at T-15 plus this much - still more than ten minutes before the call.
+  assert.ok(oldSchedule[oldSchedule.length - 1] < 4 * MIN, 'all four attempts inside four minutes');
+  assert.ok(15 * MIN - oldSchedule[oldSchedule.length - 1] > 10 * MIN, 'last attempt lands before T-10');
 });
 
-check('relevance: a confirmation page that ALSO has a player is still recorded', () => {
-  // Plenty of providers say "you will receive a confirmation email" on the very page that then
-  // plays the call. The emailed-link refusal must only apply where there is nothing to play.
-  const verdict = judgeRelevance({
-    title: 'ACME Q2 2026 Earnings Call',
-    url: 'https://edge.media-server.com/mmc/p/abc12345/',
-    text: 'You will receive a confirmation email. The webcast begins shortly.',
-    hasPlayer: true,
-    symbol: 'ACME',
-    year: '2026',
-    period: 'Q2',
-    dialinUrl: 'https://edge.media-server.com/mmc/p/abc12345/',
-  });
-  assert.strictEqual(verdict.accepted, true);
+check('retry: attempts now fill the window and the last lands about a minute before the start', () => {
+  const MIN = 60 * 1000;
+  let msUntilStart = 15 * MIN;
+  const landings = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const delay = retryDelayMsFor({ attempts: attempt, maxAttempts: 4, msUntilStart });
+    msUntilStart -= delay;
+    landings.push(msUntilStart / MIN);
+  }
+  // Three retries after the first attempt, ending close to - but not past - the start.
+  assert.ok(landings[2] > 0, `last attempt must still be before the call (got T${landings[2].toFixed(1)})`);
+  assert.ok(landings[2] <= 1.5, `last attempt should be near the start, got T-${landings[2].toFixed(1)} min`);
+  // And strictly ordered, each one later than the last.
+  assert.ok(landings[0] > landings[1] && landings[1] > landings[2], 'attempts must march towards the start');
+});
+
+check('retry: an attempt is never scheduled past the start, at any window width', () => {
+  // Past the start is refused as late by shouldSkipAsLate, so a delay that overshoots does not
+  // merely arrive late - it throws the attempt away.
+  const MIN = 60 * 1000;
+  for (const windowMin of [2, 3, 5, 8, 12, 15, 20, 30, 45]) {
+    let msUntilStart = windowMin * MIN;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const delay = retryDelayMsFor({ attempts: attempt, maxAttempts: 4, msUntilStart });
+      msUntilStart -= delay;
+      if (msUntilStart <= 0) {
+        // Only acceptable once the exponential floor is what forced it - a narrow window has no
+        // room to spread, and the old behaviour is then correct.
+        assert.ok(windowMin <= 3, `window ${windowMin} min overshot the start on attempt ${attempt + 1}`);
+      }
+    }
+  }
+});
+
+check('retry: falls back to the plain exponential when there is nothing to spread over', () => {
+  // No schedule known, already under way, or out of attempts: unchanged behaviour.
+  assert.strictEqual(retryDelayMsFor({ attempts: 1, maxAttempts: 4, msUntilStart: null }), 30000);
+  assert.strictEqual(retryDelayMsFor({ attempts: 2, maxAttempts: 4, msUntilStart: null }), 60000);
+  assert.strictEqual(retryDelayMsFor({ attempts: 1, maxAttempts: 4, msUntilStart: -5 * 60000 }), 30000);
+  assert.strictEqual(retryDelayMsFor({ attempts: 4, maxAttempts: 4, msUntilStart: 15 * 60000 }), 240000);
+  assert.strictEqual(retryDelayMsFor({ attempts: 1, maxAttempts: 4, msUntilStart: 30000 }), 30000);
+});
+
+check('retry: the exponential is the floor, so a transient failure is not made to wait', () => {
+  // A wide window must not turn a 30-second retry into a ten-minute one for no reason: the spread
+  // only ever ADDS patience where the old cadence would have run out of attempts too early.
+  const delay = retryDelayMsFor({ attempts: 1, maxAttempts: 4, msUntilStart: 4 * 60000 });
+  assert.ok(delay >= 30000, 'never shorter than the base delay');
+  assert.ok(delay <= 10 * 60 * 1000, 'never longer than the cap');
 });
 
 // ------------------------------------------------- drift within a provider

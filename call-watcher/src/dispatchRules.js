@@ -85,4 +85,53 @@ function shouldReacquireNow({ minsLeft, reacquireGraceMinutes = 30, startsWithin
   return { reacquire: true, reason: 'the call is under way and nothing is recording it' };
 }
 
-module.exports = { shouldSkipAsLate, shouldReacquireNow };
+// How long to wait before trying a failed call again.
+//
+// THE PROBLEM THIS SOLVES. Dispatch happens at thresholdMinutes (15) before the call, and the
+// old rule was a plain exponential backoff from the moment of failure: 30s, 60s, 120s. Four
+// attempts therefore all happened within four minutes of dispatch - every one of them finished
+// by about T-11 - and since an attempt may only START before the call begins, that was the end
+// of it. resetExhaustedFailures only runs at startup, so nothing came back to it.
+//
+// For any provider that does not open its player until the call actually starts, that schedule
+// cannot succeed. It is not a race that we lose; there is no attempt made while the call is on
+// air. Measured on 2026-09-01: SLHN.SW and SWSDF (Chorus Call) spent all four attempts between
+// 06:45 and 06:52 for an 07:00 call and got the "thank you for registering" page each time -
+// filling the very same form after the event had opened produced a playing video in place. LX
+// (10:45-10:49 for an 11:00 call) and SY (11:15-11:19 for an 11:30 call) have the identical
+// shape. Five of eight failures that day were this and nothing else.
+//
+// THE RULE. While the call is still ahead of us, spread the attempts we have left across the
+// time we have left, aiming to land the last one about a minute before the start. The exponential
+// remains the floor and the cap, so a call discovered late, or one already under way, behaves
+// exactly as before.
+//
+// Why aim for T-1 rather than T-0: an attempt starting at or after the scheduled time is refused
+// as late by shouldSkipAsLate, deliberately - a transcript missing the opening remarks looks
+// like a success and is not one. Landing at T-1 is the last moment that is still allowed.
+function retryDelayMsFor({
+  attempts,
+  maxAttempts = 4,
+  msUntilStart = null,
+  baseDelayMs = 30000,
+  maxDelayMs = 10 * 60 * 1000,
+}) {
+  const exponential = Math.min(baseDelayMs * 2 ** Math.max(0, attempts - 1), maxDelayMs);
+
+  const attemptsLeft = Math.max(0, Number(maxAttempts) - Number(attempts));
+  // Nothing left to schedule, or no idea when the call starts, or it has already started: the
+  // old behaviour is the right behaviour.
+  if (!attemptsLeft || msUntilStart === null || !Number.isFinite(msUntilStart)) return exponential;
+
+  const AIM_BEFORE_START_MS = 60 * 1000;
+  const usable = msUntilStart - AIM_BEFORE_START_MS;
+  // Less than a minute of usable window: there is no room to spread anything.
+  if (usable <= 0) return exponential;
+
+  const spread = usable / attemptsLeft;
+  // The floor matters. A genuinely transient failure should not be made to wait minutes when the
+  // window is wide, and the exponential is what the retry cadence has always been.
+  return Math.max(exponential, Math.min(spread, maxDelayMs));
+}
+
+module.exports = { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor };

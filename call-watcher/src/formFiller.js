@@ -850,43 +850,55 @@ async function fillRequiredUnmatched(frame, identity, logger) {
     // answer for one is never worth the risk of posting it to the call.
     if ((await el.evaluate((node) => node.tagName.toLowerCase()).catch(() => '')) === 'textarea') continue;
 
-    const required = await el
-      .evaluate((node) => {
-        if (node.required || node.getAttribute('aria-required') === 'true') return true;
-        if (/(^|[\s_-])required([\s_-]|$)/i.test(node.className || '')) return true;
+    // An email or phone box is SELF-IDENTIFYING: its type attribute says what belongs in it, so
+    // it does not need a required marker to be worth filling. The asterisk rule below exists to
+    // stop us inventing "Other" for boxes we do not understand, and neither of these is that.
+    //
+    // SY 2026Q2 was lost to the gap. webinar.net's "Log In Now" gate is a single
+    // <input type="email"> with no name, no id, no placeholder and no label - the type is its
+    // entire description - and with no asterisk anywhere near it, the only field on the page was
+    // skipped four times running. The page title never changed from "webinar.net".
+    //
+    // Furniture is already excluded above, so a footer newsletter box cannot reach this.
+    const selfIdentifying = type === 'email' ? identity.email : type === 'tel' ? identity.phone : null;
 
-        // Most forms mark this with an asterisk rather than an attribute, so the field's own
-        // label and its own group are searched for one - and nothing wider.
-        //
-        // Climbing to any ancestor holding OTHER fields reads their asterisks as this one's. A
-        // flat form with no wrappers put every field's label under one parent, and an earlier
-        // version that allowed that marked an explicitly optional "Referred by (optional)" box
-        // as required and answered it.
-        let group = null;
-        let el = node.parentElement;
-        for (let depth = 0; el && depth < 6; depth++, el = el.parentElement) {
-          if (el.querySelectorAll('input:not([type=hidden]), select, textarea').length !== 1) break;
-          group = el;
-        }
+    let required = Boolean(selfIdentifying);
+    if (!required) {
+      required = await el
+        .evaluate((node) => {
+          if (node.required || node.getAttribute('aria-required') === 'true') return true;
+          if (/(^|[\s_-])required([\s_-]|$)/i.test(node.className || '')) return true;
 
-        const own = [];
-        if (group) own.push(group);
-        if (node.id) {
-          const explicit = document.querySelector(`label[for="${node.id}"]`);
-          if (explicit) own.push(explicit);
-        }
-        const wrapping = node.closest('label');
-        if (wrapping) own.push(wrapping);
+          // Most forms mark this with an asterisk rather than an attribute, so the field's own
+          // label and its own group are searched for one - and nothing wider.
+          //
+          // Climbing to any ancestor holding OTHER fields reads their asterisks as this one's. A
+          // flat form with no wrappers put every field's label under one parent, and an earlier
+          // version that allowed that marked an explicitly optional "Referred by (optional)" box
+          // as required and answered it.
+          let group = null;
+          let el = node.parentElement;
+          for (let depth = 0; el && depth < 6; depth++, el = el.parentElement) {
+            if (el.querySelectorAll('input:not([type=hidden]), select, textarea').length !== 1) break;
+            group = el;
+          }
 
-        return own.some((n) => (n.innerText || '').includes('*'));
-      })
-      .catch(() => false);
+          const own = [];
+          if (group) own.push(group);
+          if (node.id) {
+            const explicit = document.querySelector(`label[for="${node.id}"]`);
+            if (explicit) own.push(explicit);
+          }
+          const wrapping = node.closest('label');
+          if (wrapping) own.push(wrapping);
+
+          return own.some((n) => (n.innerText || '').includes('*'));
+        })
+        .catch(() => false);
+    }
     if (!required) continue;
 
-    // An email or phone box that reached here was not matched by wording, but its TYPE says
-    // what belongs in it, and a real address beats "Other".
-    const value =
-      type === 'email' ? identity.email : type === 'tel' ? identity.phone : identity.fallbackAnswer || 'Other';
+    const value = selfIdentifying || identity.fallbackAnswer || 'Other';
 
     const label = description.trim().slice(0, 60) || 'an unlabelled field';
     const ok = await el
@@ -1464,7 +1476,14 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
       await answerConsentRadios(frame, logger);
       await tickWaiverCheckboxes(frame, logger);
       // Last, so it only ever sees what everything else declined to answer.
-      await fillRequiredUnmatched(frame, identity, logger);
+      //
+      // COUNTED, like every other filler above it. Discarding this number meant a page whose
+      // only field is answered here looked untouched: `committed` stayed false, the click step
+      // was restricted to registration-worded buttons, and the form was filled and then never
+      // submitted. SY 2026Q2 is the case - a lone <input type="email"> and a button reading
+      // "Attend", which is not registration wording - and the log said "Controls present but
+      // none looked like a registration step" on a page whose gate we had just filled in.
+      filledCount += await fillRequiredUnmatched(frame, identity, logger);
       // `lastAction` matters as much as `filledCount` here, and only on a form split across
       // steps. The second step often has NOTHING to type - just a confirmation and a button -
       // so filledCount is 0 there, which used to restrict the click to registration-worded

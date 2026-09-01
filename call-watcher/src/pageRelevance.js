@@ -92,12 +92,6 @@ function driftedWithinHost(url, dialinUrl) {
   return !expected.some((token) => here.includes(token.toLowerCase()));
 }
 
-// A provider that takes the registration and then sends the join link by email. The page is a
-// dead end for automation, however well the form was filled: there is no player on it and no
-// link onward, and the mailbox belongs to the dummy identity.
-const EMAILED_LINK_PATTERN =
-  /(?:will\s+)?receive\s+(?:a\s+)?(?:confirmation\s+)?e-?mail|(?:join|access)\s+(?:link|details|instructions)\s+(?:will\s+be\s+)?(?:sent|emailed)|check\s+your\s+(?:e-?mail|inbox)/i;
-
 function symbolAppearsAsWord(haystack, symbolRoot) {
   if (!symbolRoot || symbolRoot.length < 2) return false;
   return new RegExp(`\\b${escapeForRegex(symbolRoot)}\\b`, 'i').test(haystack);
@@ -127,19 +121,6 @@ function judgeRelevance({
   // The load-bearing check. Without something that can play, there is nothing to capture, and
   // every second recorded is silence that looks exactly like a successful transcript.
   if (!hasPlayer) {
-    // Separated out because it is NOT a fault and no amount of work on this code will fix it.
-    // The registration succeeded; the provider's answer is to email the join link to the address
-    // we gave it, and nothing reads that mailbox. SLHN.SW and SWSDF spent four attempts each on
-    // Chorus Call's thankYou page - "You will receive a confirmation email with additional
-    // information about this event" - and were reported as "no player", which reads like a bug.
-    if (EMAILED_LINK_PATTERN.test(`${title} ${text}`)) {
-      return {
-        accepted: false,
-        reason:
-          'the provider accepted the registration and will EMAIL the join link, so there is ' +
-          'nothing to join in this browser',
-      };
-    }
     return {
       accepted: false,
       reason:

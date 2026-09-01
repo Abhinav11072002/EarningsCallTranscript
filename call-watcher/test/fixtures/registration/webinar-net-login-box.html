@@ -1,0 +1,18 @@
+<!doctype html>
+<!-- webinar.net's "Log In Now" gate, as it actually appeared for SY 2026Q2 on 2026-08-31.
+     Probed live: the ONLY field on the page is a bare <input type="email"> with no name, no id,
+     no placeholder, no label and no asterisk. Its type attribute is its entire description.
+     The field was skipped on all four attempts and the page title never changed from
+     "webinar.net", so the call was reported as having no player. -->
+<html><body>
+  <h1>So-Young International Inc. Second Quarter 2026 Earnings Conference Call</h1>
+  <p>Date: Monday, August 31, 2026 &middot; Time: 7:30 AM Eastern Time</p>
+  <p>Welcome to this webinar!</p>
+  <form id="login">
+    <h2>Log In Now</h2>
+    <input type="email" data-expect="email">
+    <button type="submit">Attend</button>
+  </form>
+  <p id="result" hidden>Registration complete</p>
+  <script>login.onsubmit=(e)=>{e.preventDefault();login.hidden=true;result.hidden=false;};</script>
+</body></html>

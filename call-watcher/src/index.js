@@ -7,7 +7,7 @@ const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
-const { shouldSkipAsLate, shouldReacquireNow } = require('./dispatchRules');
+const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor } = require('./dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('./providerRules');
 const { ownsRow, readShard, describeShard } = require('./shard');
 const { strategyForAttempt } = require('./retryStrategy');
@@ -328,7 +328,20 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
 function recordFailure(row, key, err, store, logger, obs, startedAt, resolvedUrl) {
   logger.error(`Failed processing ${row.symbol} ${row.fiscalPeriod}: ${err.message}`);
   const attempts = store.get(key)?.attempts || 1;
-  const retryDelay = Math.min(RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1), RETRY_MAX_DELAY_MS);
+  // Start-aware, not a plain backoff. See retryDelayMsFor: an exponential from the moment of
+  // failure spends every attempt within four minutes of a T-15 dispatch, so a provider that only
+  // opens its player when the call begins is never attempted while the call is on air.
+  const retryDelay = retryDelayMsFor({
+    attempts,
+    maxAttempts: Number(config.maxAttempts ?? 4),
+    msUntilStart: row.dueAt ? row.dueAt - Date.now() : null,
+    baseDelayMs: RETRY_BASE_DELAY_MS,
+    maxDelayMs: RETRY_MAX_DELAY_MS,
+  });
+  logger.info(
+    `Next attempt for ${row.symbol} ${row.fiscalPeriod} in ${Math.round(retryDelay / 1000)}s` +
+      `${row.dueAt ? ` (call starts in ${Math.round((row.dueAt - Date.now()) / 60000)} min)` : ''}.`
+  );
   store.fail(key, err.message, retryDelay);
   obs.recordOutcome({
     status: 'failed',
