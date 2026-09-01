@@ -20,6 +20,7 @@ const SPEC = {
   pollIntervalMs: { type: 'int', min: 1000, max: 600000 },
   thresholdMinutes: { type: 'number', min: 0, max: 240 },
   dashboardPort: { type: 'int', min: 1024, max: 65535 },
+  peerDashboards: { type: 'urls' },
   retryWindowMinutes: { type: 'number', min: 0, max: 1440 },
   maxAttempts: { type: 'int', min: 1, max: 50 },
   popupTimeoutMs: { type: 'int', min: 1000, max: 120000 },
@@ -103,6 +104,22 @@ function checkValue(key, value, rule, errors, warnings) {
       if (missing.length) warnings.push(`dummyIdentity: no value for ${missing.join(', ')} - forms asking for those cannot be completed`);
       if (value.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(value.email))) {
         bad(`dummyIdentity.email does not look like an email address ("${value.email}")`);
+      }
+      return;
+    }
+
+    case 'urls': {
+      if (!Array.isArray(value)) return bad('must be an array of dashboard URLs');
+      for (const entry of value) {
+        if (typeof entry !== 'string' || !entry.trim()) return bad(`contains a non-string entry (${JSON.stringify(entry)})`);
+        try {
+          const parsed = new URL(entry);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            bad(`entry "${entry}" must be an http or https URL`);
+          }
+        } catch {
+          bad(`entry "${entry}" is not a valid URL - it needs the scheme, e.g. http://192.168.1.20:8477`);
+        }
       }
       return;
     }

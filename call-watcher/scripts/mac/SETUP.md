@@ -397,9 +397,19 @@ launchctl kickstart -k gui/$(id -u)/com.fmp.calldashboard
 
 ### What to look at
 
-The header shows the shard line and the heartbeat age. **STALE** means the heartbeat is more than
-90 seconds old, which means the watcher is not polling - that is the one thing on the page worth
-reacting to immediately.
+The header shows the shard line, the next call with a live countdown, and the heartbeat age.
+**STALE** means the heartbeat is more than 90 seconds old, which means the watcher is not polling -
+that is the one thing on the page worth reacting to immediately.
+
+**Upcoming** lists what this machine's share has coming, counting down. A row reading `no link yet`
+is a call the portal has not been given a dial-in link for; that is a data problem upstream, not a
+watcher problem.
+
+**Attempts** is what happened today. `silent` means the capture started but no audio was playing
+when it did - counted as a success everywhere else, and the one outcome that looks identical to a
+good recording in every other field.
+
+The log pane filters as you type and can be narrowed to warnings and errors only.
 
 Red chips appear only when a warning flag is set: table empty, no dial-in links, times unreadable,
 queue backlog, tabs leaking, cannot read streams, Chrome disconnected. No chips is the normal
@@ -407,10 +417,22 @@ state.
 
 `?day=YYYY-MM-DD` shows a past day instead of today.
 
-### Two machines
+### Two machines on one page
 
-Each machine serves its own dashboard on its own address; keep two bookmarks. The API sends
-permissive CORS headers so one page can read both, but nothing built here does that yet.
+Point each machine at the other in `config.local.json` and the page grows a **Machines** strip
+showing both, with the shard line and counts for each:
+
+```json
+{
+  "peerDashboards": ["http://192.168.68.60:8477"]
+}
+```
+
+Use the other machine's LAN address, with the scheme. A peer that cannot be reached is shown as
+`unreachable` rather than silently omitted, which is the point - a machine whose watcher is down
+records nothing and nothing else raises an alarm about it.
+
+`DASHBOARD_PEERS=http://host:8477,http://other:8477` overrides the config for one run.
 
 ### Before you expose it
 

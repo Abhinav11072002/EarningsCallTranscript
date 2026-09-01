@@ -13,6 +13,14 @@ const STALE_HEARTBEAT_MS = 90 * 1000;
 const config = loadConfig();
 const port = Number(process.env.DASHBOARD_PORT || config.dashboardPort || 8477);
 const host = process.env.DASHBOARD_HOST || '0.0.0.0';
+const PEERS = (process.env.DASHBOARD_PEERS
+  ? process.env.DASHBOARD_PEERS.split(',')
+  : Array.isArray(config.peerDashboards)
+    ? config.peerDashboards
+    : []
+)
+  .map((entry) => String(entry).trim())
+  .filter(Boolean);
 
 function dayStamp(now = new Date()) {
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
@@ -129,9 +137,13 @@ function buildState(day) {
   }
 
   const calls = callsForDay(day);
+  const upcoming = readJson(path.join(DATA_DIR, 'upcoming.json'), null);
   return {
     machine: os.hostname(),
+    peers: PEERS,
     day,
+    upcoming: upcoming && Array.isArray(upcoming.rows) ? upcoming.rows : [],
+    upcomingAt: upcoming ? upcoming.updatedAt : null,
     now: new Date(now).toISOString(),
     shard,
     heartbeat,

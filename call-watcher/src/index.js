@@ -768,6 +768,27 @@ async function main() {
       chromeConnected: browser.isConnected(),
     });
 
+    obs.upcoming(
+      rows
+        .filter((row) => typeof row.dueAt === 'number' && Number.isFinite(row.dueAt))
+        .filter((row) => row.dueAt - Date.now() > -45 * 60000)
+        .sort((a, b) => a.dueAt - b.dueAt)
+        .slice(0, 40)
+        .map((row) => {
+          const record = store.get(rowKey(row));
+          return {
+            symbol: row.symbol,
+            fiscalPeriod: row.fiscalPeriod,
+            earningsDate: row.earningsDate,
+            dueAt: row.dueAt,
+            hasLink: Boolean(row.dialinLink),
+            status: record ? record.status : null,
+            attempts: record ? record.attempts || 0 : 0,
+            nextAttemptAt: record && record.nextAttemptAt ? record.nextAttemptAt : null,
+          };
+        })
+    );
+
     // Deliberately NOT returning early on an empty dueRows: the late candidates below still
     // need the stream read, and a poll with nothing due is exactly when a call that failed its
     // confirmation is sitting there recording, unrecognised.

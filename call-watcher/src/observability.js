@@ -25,6 +25,7 @@ function dayStamp(now = new Date()) {
 function createObservability(dataDir, logger) {
   fs.mkdirSync(dataDir, { recursive: true });
   const heartbeatPath = path.join(dataDir, 'heartbeat.json');
+  const upcomingPath = path.join(dataDir, 'upcoming.json');
   const startedAt = new Date().toISOString();
   const counters = { pollCount: 0, attempted: 0, started: 0, failed: 0, skippedLate: 0 };
 
@@ -41,6 +42,15 @@ function createObservability(dataDir, logger) {
 
   return {
     counters,
+
+    upcoming(rows) {
+      safeWrite(() => {
+        fs.writeFileSync(
+          upcomingPath,
+          JSON.stringify({ updatedAt: new Date().toISOString(), rows }, null, 2)
+        );
+      }, 'upcoming.json');
+    },
 
     // Called every poll. `health` carries what an external watchdog needs to judge liveness
     // without parsing logs: staleness of this file, plus whether the table is still readable.
