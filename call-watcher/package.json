@@ -21,7 +21,8 @@
     "test:gauntlet": "node scripts/tests/test-gauntlet.js",
     "capture:registration": "node scripts/tests/capture-registration-fixture.js",
     "test:fuzz": "node scripts/tests/test-fuzz.js",
-    "shard-preview": "node scripts/shard-preview.js"
+    "shard-preview": "node scripts/shard-preview.js",
+    "dashboard": "node scripts/dashboard.js"
   },
   "dependencies": {
     "playwright-core": "^1.47.2"

@@ -19,6 +19,7 @@ const SPEC = {
   cdpUrl: { type: 'url', required: true },
   pollIntervalMs: { type: 'int', min: 1000, max: 600000 },
   thresholdMinutes: { type: 'number', min: 0, max: 240 },
+  dashboardPort: { type: 'int', min: 1024, max: 65535 },
   retryWindowMinutes: { type: 'number', min: 0, max: 1440 },
   maxAttempts: { type: 'int', min: 1, max: 50 },
   popupTimeoutMs: { type: 'int', min: 1000, max: 120000 },

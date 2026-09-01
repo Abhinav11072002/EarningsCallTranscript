@@ -13,7 +13,7 @@ in ways that are not obvious.
 > with the default configuration will both record every call** — duplicate transcripts, and two
 > browsers competing for the same webcast.
 >
-> Set `shard` on each machine before starting the second one. See **step 17**.
+> Set `shard` on each machine before starting the second one. See **step 16**.
 
 ---
 
@@ -274,7 +274,7 @@ sleep 10 && launchctl remove cw-diag && cat /tmp/cw-diag.log
 
 **Expect 3/3.** Anything else is worth fixing before trusting the machine.
 
-## 17. Splitting the calls between machines
+## 16. Splitting the calls between machines
 
 Each machine takes a fixed share of the book. Put this in `config.local.json`, **never** in
 `config.json` — that file is tracked, so a shard index committed there would overwrite the other
@@ -343,7 +343,7 @@ Shard 2 of 2: this machine takes the calls assigned to index 1.
 Two machines with the same `index` silently drop half the book. Two with different `count`
 values drop an unpredictable share. Neither looks like an error anywhere else.
 
-## 16. The only test that counts
+## 17. The only test that counts
 
 ```bash
 sudo reboot
@@ -360,6 +360,67 @@ If Chrome is back with its flags and the watcher is polling with nobody having t
 machine, the setup is done.
 
 ---
+
+## 18. The dashboard (optional)
+
+A read-only web page showing what this machine is doing right now: whether the watcher is alive,
+what the current poll sees, today's calls with their outcomes, and a live tail of the log. It
+replaces watching `tail -f` by hand.
+
+It is a **separate process** from the watcher, deliberately. It only ever reads `data/`, and if it
+crashes or its port is taken the watcher does not notice.
+
+```bash
+npm run dashboard
+```
+
+It prints the addresses it is listening on. Open it from any machine on the same network:
+
+```
+http://<this-mac-ip>:8477
+```
+
+To have it up whenever the machine is on, install its own Launch Agent:
+
+```bash
+cp scripts/mac/com.fmp.calldashboard.plist ~/Library/LaunchAgents/
+# replace USERNAME inside the plist first
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.fmp.calldashboard.plist
+launchctl print gui/$(id -u)/com.fmp.calldashboard | grep -E "state|pid"
+```
+
+Restart it after a `git pull` the same way as the watcher:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.fmp.calldashboard
+```
+
+### What to look at
+
+The header shows the shard line and the heartbeat age. **STALE** means the heartbeat is more than
+90 seconds old, which means the watcher is not polling - that is the one thing on the page worth
+reacting to immediately.
+
+Red chips appear only when a warning flag is set: table empty, no dial-in links, times unreadable,
+queue backlog, tabs leaking, cannot read streams, Chrome disconnected. No chips is the normal
+state.
+
+`?day=YYYY-MM-DD` shows a past day instead of today.
+
+### Two machines
+
+Each machine serves its own dashboard on its own address; keep two bookmarks. The API sends
+permissive CORS headers so one page can read both, but nothing built here does that yet.
+
+### Before you expose it
+
+There is **no authentication**. Anyone who can reach the port can read it. On a trusted office
+network that is fine; do not port-forward it. The Deepgram key is not in the watcher's config or
+its logs - it lives only in the extension - so that is not exposed, but dial-in URLs in the log do
+carry Zoom `pwd=` tokens, which are meeting links.
+
+Change the port with `dashboardPort` in `config.local.json`, or `DASHBOARD_PORT` in the
+environment. To stop it listening beyond this machine, set `DASHBOARD_HOST=127.0.0.1`.
 
 ## Running it day to day
 

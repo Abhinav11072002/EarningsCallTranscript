@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The read-only dashboard, as a separate Launch Agent from the watcher.
+
+  Separate on purpose. The dashboard must never be able to take a watcher down mid-call, so it
+  runs as its own process with its own lifecycle: it only reads data/, and if it crashes or the
+  port is taken, the watcher does not notice.
+
+  Install:
+    cp scripts/mac/com.fmp.calldashboard.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.fmp.calldashboard.plist
+
+  Restart after a pull:
+    launchctl kickstart -k gui/$(id -u)/com.fmp.calldashboard
+
+  Replace USERNAME below with the account this runs as - ~ is not expanded inside a plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fmp.calldashboard</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>node</string>
+        <string>/Users/USERNAME/EarningsCallTranscript/call-watcher/scripts/dashboard.js</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/EarningsCallTranscript/call-watcher/data/dashboard.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/EarningsCallTranscript/call-watcher/data/dashboard.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/EarningsCallTranscript/call-watcher</string>
+
+    <!-- launchd gives a job a minimal PATH with no Homebrew, so `node` would not be found even
+         though it works in a terminal. Same reason as the watcher's own agent. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

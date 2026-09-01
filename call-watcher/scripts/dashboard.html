@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>call-watcher</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --ink: #16181d;
+    --muted: #6b7280;
+    --line: #e3e6ea;
+    --ok: #0a7d32;
+    --bad: #b3261e;
+    --warn: #8a5a00;
+    --panel: #f7f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.45 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .machine { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+  .spacer { flex: 1; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
+  .live .dot { background: var(--ok); }
+  .dead .dot { background: var(--bad); }
+  .live { color: var(--ok); font-weight: 600; }
+  .dead { color: var(--bad); font-weight: 600; }
+  main { padding: 18px; display: grid; gap: 18px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .card { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; background: var(--panel); }
+  .card .n { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .card .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .card.alarm { border-color: var(--bad); background: #fdf3f2; }
+  .card.alarm .n { color: var(--bad); }
+  .warnings { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { border: 1px solid var(--bad); color: var(--bad); background: #fdf3f2; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 8px; font-weight: 650; }
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 650; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td.sym { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; white-space: nowrap; }
+  td.err { color: var(--muted); max-width: 620px; }
+  .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+  .tag.started { color: var(--ok); }
+  .tag.failed { color: var(--bad); }
+  .tag.silent { color: var(--warn); }
+  pre {
+    margin: 0;
+    padding: 10px 12px;
+    background: #0f1115;
+    color: #d7dae0;
+    border-radius: 6px;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    height: 380px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  pre .warn { color: #f0b429; }
+  pre .err { color: #ff8a80; }
+  .empty { color: var(--muted); padding: 14px; }
+  footer { padding: 0 18px 22px; color: var(--muted); font-size: 12px; }
+  label { font-size: 12px; color: var(--muted); user-select: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>call-watcher</h1>
+  <span class="machine" id="machine">connecting…</span>
+  <span class="spacer"></span>
+  <span id="shard" class="machine"></span>
+  <span id="alive" class="dead"><span class="dot"></span>no heartbeat</span>
+</header>
+
+<main>
+  <section id="warnings" class="warnings"></section>
+
+  <section class="cards" id="cards"></section>
+
+  <section>
+    <h2 id="callsHeading">Calls</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Symbol</th><th>Period</th><th>Outcome</th><th>Tries</th><th>Last</th><th>Detail</th></tr></thead>
+      <tbody id="calls"><tr><td colspan="6" class="empty">nothing yet today</td></tr></tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>Live log <label><input type="checkbox" id="follow" checked> follow</label></h2>
+    <pre id="log">loading…</pre>
+  </section>
+</main>
+
+<footer id="foot"></footer>
+
+<script>
+const el = (id) => document.getElementById(id);
+const askedDay = new URLSearchParams(location.search).get('day');
+const dayQuery = askedDay ? '&day=' + encodeURIComponent(askedDay) : '';
+
+function todayStamp() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function clock(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toTimeString().slice(0, 8);
+}
+
+function card(label, value, alarm) {
+  return '<div class="card' + (alarm ? ' alarm' : '') + '"><div class="n">' + value + '</div><div class="k">' + label + '</div></div>';
+}
+
+function esc(text) {
+  return String(text == null ? '' : text).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+const WARNING_LABELS = {
+  noRows: 'table is empty',
+  noLinks: 'no dial-in links',
+  noReadableTimes: 'times unreadable',
+  queueBacklog: 'queue backlog',
+  tabLeak: 'tabs leaking',
+  cannotReadStreams: 'cannot read streams',
+  chromeDisconnected: 'Chrome disconnected',
+};
+
+async function refreshState() {
+  let state;
+  try {
+    state = await (await fetch('/api/state?_=' + Date.now() + dayQuery, { cache: 'no-store' })).json();
+  } catch (err) {
+    el('alive').className = 'dead';
+    el('alive').innerHTML = '<span class="dot"></span>dashboard unreachable';
+    return;
+  }
+  el('machine').textContent = state.machine;
+  el('shard').textContent = state.shard && state.shard.description ? state.shard.description : '';
+
+  const beat = state.beatAgeSec == null ? 'never' : state.beatAgeSec + 's ago';
+  el('alive').className = state.alive ? 'live' : 'dead';
+  el('alive').innerHTML = '<span class="dot"></span>' + (state.alive ? 'watching' : 'STALE') + ' · heartbeat ' + beat;
+
+  const hb = state.heartbeat || {};
+  const flags = hb.warnings || {};
+  el('warnings').innerHTML = Object.keys(WARNING_LABELS)
+    .filter((k) => flags[k])
+    .map((k) => '<span class="chip">' + WARNING_LABELS[k] + '</span>')
+    .join('');
+
+  el('cards').innerHTML = [
+    card('recorded', state.counts.started, false),
+    card('failed', state.counts.failed, state.counts.failed > 0),
+    card('silent capture', state.counts.silent, state.counts.silent > 0),
+    card('rows watched', hb.rowsSeen == null ? '–' : hb.rowsSeen, false),
+    card('with links', hb.withLinks == null ? '–' : hb.withLinks, false),
+    card('due now', hb.dueNow == null ? '–' : hb.dueNow, false),
+    card('open tabs', hb.openCallTabs == null ? '–' : hb.openCallTabs, hb.openCallTabs > 6),
+    card('polls', hb.pollCount == null ? '–' : hb.pollCount, false),
+  ].join('');
+
+  const rows = state.calls.map((c) => {
+    const silent = c.status === 'started' && c.audioAudible === false;
+    const tag = silent ? 'silent' : c.status === 'started' ? 'started' : 'failed';
+    const word = silent ? 'started (silent)' : c.status;
+    const detail = c.status === 'started' ? c.pageTitle || c.resolvedUrl || '' : c.error || '';
+    return (
+      '<tr><td class="sym">' + esc(c.symbol) + '</td><td>' + esc(c.fiscalPeriod) + '</td>' +
+      '<td><span class="tag ' + tag + '">' + esc(word) + '</span></td>' +
+      '<td>' + esc(c.attempts == null ? c.tries : c.attempts) + '</td>' +
+      '<td>' + clock(c.lastTs) + '</td>' +
+      '<td class="err">' + esc(String(detail).slice(0, 300)) + '</td></tr>'
+    );
+  });
+  el('calls').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="6" class="empty">nothing yet today</td></tr>';
+  el('callsHeading').textContent = state.day === todayStamp() ? 'Today' + String.fromCharCode(39) + 's calls' : 'Calls on ' + state.day;
+  el('foot').textContent =
+    state.day + ' · threshold ' + state.thresholdMinutes + ' min · refreshed ' + clock(state.now);
+}
+
+async function refreshLog() {
+  let data;
+  try {
+    data = await (await fetch('/api/log?tail=400' + dayQuery, { cache: 'no-store' })).json();
+  } catch {
+    return;
+  }
+  const pane = el('log');
+  const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 40;
+  if (data.missing) {
+    pane.textContent = 'no log file for today yet';
+    return;
+  }
+  pane.innerHTML = data.lines
+    .map((line) => {
+      const cls = /\[ERROR\]/.test(line) ? 'err' : /\[WARN\]/.test(line) ? 'warn' : '';
+      return cls ? '<span class="' + cls + '">' + esc(line) + '</span>' : esc(line);
+    })
+    .join('\n');
+  if (el('follow').checked && atBottom) pane.scrollTop = pane.scrollHeight;
+}
+
+async function tick() {
+  await Promise.all([refreshState(), refreshLog()]);
+}
+
+tick();
+setInterval(tick, 3000);
+el('follow').addEventListener('change', () => {
+  if (el('follow').checked) el('log').scrollTop = el('log').scrollHeight;
+});
+</script>
+</body>
+</html>

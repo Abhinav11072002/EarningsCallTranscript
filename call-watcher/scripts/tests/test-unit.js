@@ -18,6 +18,7 @@ const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor } = require('../..
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('../../src/providerRules');
 const { shardIndexFor, ownsRow, readShard, describeShard } = require('../../src/shard');
 const { isProviderNonContentPath, isFurniturePath } = require('../../src/webcastResolver');
+const dashboard = require('../dashboard.js');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow, buildShortcutCommand } = require('../../src/extensionTrigger');
@@ -2070,6 +2071,42 @@ check('furniture paths: only the final segment decides', () => {
   ];
   for (const url of furniture) assert.strictEqual(isFurniturePath(url), true, url);
   for (const url of notFurniture) assert.strictEqual(isFurniturePath(url), false, url);
+});
+
+// ------------------------------------------------------------- dashboard
+check('dashboard: the day parameter cannot escape the data directory', () => {
+  const asUrl = (query) => new URL(`http://localhost/api/state${query}`);
+  const today = dashboard.dayStamp();
+  const rejected = [
+    '?day=../../../etc/passwd',
+    '?day=../heartbeat',
+    '?day=2026-08-24/../..',
+    '?day=%2e%2e%2f%2e%2e%2f',
+    '?day=2026-8-4',
+    '?day=abcd-ef-gh',
+    '?day=',
+    '?day=2026-08-24%00',
+    '?day=' + 'a'.repeat(500),
+    '',
+  ];
+  for (const query of rejected) {
+    assert.strictEqual(dashboard.requestedDay(asUrl(query)), today, `must fall back to today: ${query}`);
+  }
+  assert.strictEqual(dashboard.requestedDay(asUrl('?day=2026-08-24')), '2026-08-24');
+});
+
+check('dashboard: a malformed ledger line does not take the page down', () => {
+  const state = dashboard.buildState('2999-01-01');
+  assert.ok(Array.isArray(state.calls));
+  assert.strictEqual(state.calls.length, 0);
+  assert.strictEqual(state.day, '2999-01-01');
+  assert.ok(state.counts);
+});
+
+check('dashboard: a missing log file reports itself rather than throwing', () => {
+  const result = dashboard.tailLog('2999-01-01', 50);
+  assert.strictEqual(result.missing, true);
+  assert.deepStrictEqual(result.lines, []);
 });
 
 // ------------------------------------------- provider content paths

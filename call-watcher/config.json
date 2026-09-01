@@ -2,6 +2,7 @@
   "portalUrl": "https://admin.financialmodelingprep.com/?section=data-fixes&tab=earningsCall",
   "cdpUrl": "http://localhost:9222",
   "pollIntervalMs": 20000,
+  "dashboardPort": 8477,
   "thresholdMinutes": 15,
   "retryWindowMinutes": 120,
   "maxAttempts": 4,
