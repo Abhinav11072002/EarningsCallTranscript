@@ -311,6 +311,7 @@
   <span id="footDay"></span>
   <span id="footRefresh"></span>
   <span id="footPeers"></span>
+  <span id="footVersion" class="mono"></span>
 </footer>
 
 <script>
@@ -621,6 +622,7 @@ async function refresh() {
   renderNext(state);
   el('footDay').textContent = state.day + ' · threshold ' + state.thresholdMinutes + ' min';
   el('footRefresh').textContent = 'refreshed ' + clock(state.now);
+  el('footVersion').textContent = 'v2 · ' + (state.commit || '?') + ' · page ' + (state.pageVersion || '?');
 
   if (peerStates.length) {
     renderMachines(state, peerStates);

@@ -27,6 +27,30 @@ function dayStamp(now = new Date()) {
   return local.toISOString().slice(0, 10);
 }
 
+function gitHead() {
+  const gitDir = path.join(__dirname, '..', '..', '.git');
+  try {
+    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+    if (head.startsWith('ref: ')) {
+      const ref = head.slice(5).trim();
+      return fs.readFileSync(path.join(gitDir, ref), 'utf8').trim().slice(0, 7);
+    }
+    return head.slice(0, 7);
+  } catch {
+    return null;
+  }
+}
+
+function pageVersion() {
+  try {
+    const stamp = fs.statSync(PAGE_PATH).mtime;
+    const local = new Date(stamp.getTime() - stamp.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16).replace('T', ' ');
+  } catch {
+    return null;
+  }
+}
+
 function requestedDay(url) {
   const asked = url.searchParams.get('day');
   if (!asked) return dayStamp();
@@ -140,6 +164,8 @@ function buildState(day) {
   const upcoming = readJson(path.join(DATA_DIR, 'upcoming.json'), null);
   return {
     machine: os.hostname(),
+    commit: gitHead(),
+    pageVersion: pageVersion(),
     peers: PEERS,
     day,
     upcoming: upcoming && Array.isArray(upcoming.rows) ? upcoming.rows : [],
