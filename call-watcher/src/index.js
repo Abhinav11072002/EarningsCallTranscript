@@ -7,7 +7,7 @@ const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
-const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor } = require('./dispatchRules');
+const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor, withinActionableWindow } = require('./dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('./providerRules');
 const { ownsRow, readShard, describeShard } = require('./shard');
 const { strategyForAttempt } = require('./retryStrategy');
@@ -682,7 +682,11 @@ async function main() {
         earningsDate: row.earningsDate,
         hasLink: Boolean(row.dialinLink),
         timeParsed: minsLeft !== null,
-        insideWindow: minsLeft !== null && minsLeft <= config.thresholdMinutes,
+        insideWindow: withinActionableWindow({
+          minsLeft,
+          thresholdMinutes: config.thresholdMinutes,
+          retryWindowMinutes,
+        }),
       });
       if (minsLeft !== null) {
         parseableTimes++;
@@ -697,11 +701,9 @@ async function main() {
         }
         continue;
       }
-      if (minsLeft > config.thresholdMinutes) continue;
-
-      // The post-start window exists so a manually stopped transcription can be reacquired
-      // during a long call, without replaying calls from previous days.
-      if (minsLeft <= -retryWindowMinutes) continue;
+      if (!withinActionableWindow({ minsLeft, thresholdMinutes: config.thresholdMinutes, retryWindowMinutes })) {
+        continue;
+      }
 
       const record = store.get(key);
       // The whole attempt budget is spent BEFORE the call starts - see dispatchRules.js. This

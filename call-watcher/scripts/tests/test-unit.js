@@ -14,7 +14,7 @@ const path = require('path');
 
 const { parseCountdownToMinutes, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('../../src/tableWatcher');
 const { StateStore } = require('../../src/stateStore');
-const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor } = require('../../src/dispatchRules');
+const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor, withinActionableWindow } = require('../../src/dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('../../src/providerRules');
 const { shardIndexFor, ownsRow, readShard, describeShard } = require('../../src/shard');
 const { isProviderNonContentPath, isFurniturePath } = require('../../src/webcastResolver');
@@ -2140,6 +2140,46 @@ check('provider paths: hosts with no content rule are unaffected', () => {
     'https://us02web.zoom.us/j/83171321596',
   ]) {
     assert.strictEqual(isProviderNonContentPath(url), false, url);
+  }
+});
+
+check('window: the seen log and the dispatcher agree on what is actionable', () => {
+  const t = 15;
+  const r = 120;
+  const cases = [
+    [60, false],
+    [16, false],
+    [15, true],
+    [0, true],
+    [-30, true],
+    [-119, true],
+    [-120, false],
+    [-8640, false],
+    [null, false],
+    [NaN, false],
+  ];
+  for (const [minsLeft, want] of cases) {
+    assert.strictEqual(
+      withinActionableWindow({ minsLeft, thresholdMinutes: t, retryWindowMinutes: r }),
+      want,
+      `minsLeft ${minsLeft}`
+    );
+  }
+});
+
+check('window: a row days past its call is not actionable and must not read as unaccounted', () => {
+  // 2026-09-01: a batch of rows from 25-31 August surfaced on the portal for ten minutes.
+  // The seen log marked them insideWindow because that flag only tested minsLeft <= threshold,
+  // while dispatch also required minsLeft > -retryWindowMinutes - so they were correctly
+  // ignored and then reported as UNACCOUNTED, which SETUP.md says must always be zero.
+  // Fifty rows, none of them a real miss. One rule, used by both, is the fix.
+  const daysPast = (days) => -days * 24 * 60;
+  for (const days of [1, 2, 5, 7]) {
+    assert.strictEqual(
+      withinActionableWindow({ minsLeft: daysPast(days), thresholdMinutes: 15, retryWindowMinutes: 120 }),
+      false,
+      `${days} days past`
+    );
   }
 });
 

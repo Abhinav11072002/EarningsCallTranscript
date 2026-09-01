@@ -85,6 +85,11 @@ function shouldReacquireNow({ minsLeft, reacquireGraceMinutes = 30, startsWithin
   return { reacquire: true, reason: 'the call is under way and nothing is recording it' };
 }
 
+function withinActionableWindow({ minsLeft, thresholdMinutes, retryWindowMinutes }) {
+  if (minsLeft === null || !Number.isFinite(minsLeft)) return false;
+  return minsLeft <= thresholdMinutes && minsLeft > -retryWindowMinutes;
+}
+
 // How long to wait before trying a failed call again.
 //
 // THE PROBLEM THIS SOLVES. Dispatch happens at thresholdMinutes (15) before the call, and the
@@ -135,4 +140,4 @@ function retryDelayMsFor({
   return Math.min(Math.max(exponential, spread), maxDelayMs, latestUseful);
 }
 
-module.exports = { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor };
+module.exports = { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor, withinActionableWindow };
