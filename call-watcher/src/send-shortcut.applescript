@@ -85,7 +85,25 @@ on run argv
 	set gotFocus to false
 	set lastFront to "nothing"
 	repeat with attempt from 1 to maxAttempts
+		-- TWO mechanisms, because one of them is not enough.
+		--
+		-- `activate` is an Apple Event, and on one of the Mac minis it returns success and
+		-- leaves Terminal frontmost - every attempt, with a Chrome window present, not
+		-- minimised, Automation permission granted and no error anywhere. Measured directly:
+		-- after a full second, `name of first application process whose frontmost is true`
+		-- still answered "Terminal".
+		--
+		-- On the same machine, System Events' AXRaise route worked first time. So both are
+		-- tried on every attempt: activate first because it is the gentler of the two and
+		-- already works everywhere else, then the Accessibility route as the fallback.
+		--
+		-- Wrapped in `try` deliberately: `set frontmost` needs Accessibility, and a machine
+		-- that has Automation but not Accessibility must keep whatever `activate` achieves
+		-- rather than dying here.
 		tell application "Google Chrome" to activate
+		try
+			tell application "System Events" to tell process "Google Chrome" to set frontmost to true
+		end try
 		delay 0.25
 		tell application "System Events"
 			set lastFront to name of first application process whose frontmost is true
