@@ -294,7 +294,11 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
     );
     transcriptionStarted = true;
     pageTitle = await page.title().catch(() => null);
-    store.markStarted(key);
+    try {
+      store.markStarted(key);
+    } catch (err) {
+      logger.error(`Could not persist the started state for ${row.symbol} ${row.fiscalPeriod}: ${err.message}`);
+    }
     // Hand the tab to the registry instead of closing it: the capture lives in this tab, so
     // it must stay open until the call is over. The registry is what eventually closes it.
     callTabs.register(key, page, `${row.symbol} ${row.fiscalPeriod}`, row.dueAt ?? null, row);
@@ -320,7 +324,14 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
       attempts: store.get(key)?.attempts ?? null,
     });
   } catch (err) {
-    recordFailure(row, key, err, store, logger, obs, startedAt, prepared.resolvedUrl);
+    if (transcriptionStarted) {
+      logger.error(
+        `${row.symbol} ${row.fiscalPeriod}: the capture is RUNNING but a step after it failed: ${err.message}. ` +
+          'Not recording a failure - a retry would open a second tab and record the same call twice.'
+      );
+    } else {
+      recordFailure(row, key, err, store, logger, obs, startedAt, prepared.resolvedUrl);
+    }
   } finally {
     if (page && !transcriptionStarted) await page.close().catch(() => {});
   }
