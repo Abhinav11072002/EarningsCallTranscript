@@ -17,6 +17,7 @@ const { StateStore } = require('../../src/stateStore');
 const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor } = require('../../src/dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('../../src/providerRules');
 const { shardIndexFor, ownsRow, readShard, describeShard } = require('../../src/shard');
+const { isProviderNonContentPath, isFurniturePath } = require('../../src/webcastResolver');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
 const { splitFiscalPeriod, streamMatchesRow, buildShortcutCommand } = require('../../src/extensionTrigger');
@@ -2052,6 +2053,59 @@ check('providerRules: Diamond Pass covers every host shape it appears under', ()
   assert.strictEqual(telephoneOnlyReason('https://webcast.choruscall.com/webcast.html?id=x'), null);
 });
 
+check('furniture paths: only the final segment decides', () => {
+  const furniture = [
+    'https://x.com/privacy-policy',
+    'https://x.com/privacy',
+    'https://x.com/terms-of-use',
+    'https://x.com/support',
+    'https://x.com/resources',
+  ];
+  const notFurniture = [
+    'https://x.com/company/investors/webcast',
+    'https://x.com/support/webcast/live',
+    'https://x.com/about/events/q2-2026',
+    'https://x.com/?event=123',
+    'https://x.com/webcast',
+  ];
+  for (const url of furniture) assert.strictEqual(isFurniturePath(url), true, url);
+  for (const url of notFurniture) assert.strictEqual(isFurniturePath(url), false, url);
+});
+
+// ------------------------------------------- provider content paths
+check('provider paths: a YouTube link is only the call when it is a video', () => {
+  const isCall = [
+    'https://www.youtube.com/live/1VdQLNMxZh0',
+    'https://www.youtube.com/watch?v=1VdQLNMxZh0',
+    'https://youtube.com/embed/abc123',
+    'https://www.youtube.com/v/abc123',
+  ];
+  const isNotCall = [
+    'https://www.youtube.com/@AcmeInvestorRelations',
+    'https://www.youtube.com/channel/UCxyz123',
+    'https://www.youtube.com/c/AcmeCorp',
+    'https://www.youtube.com/user/acme',
+    'https://www.youtube.com/playlist?list=PL123',
+    'https://www.youtube.com/results?search_query=acme+earnings',
+    'https://www.youtube.com/feed/subscriptions',
+    'https://www.youtube.com/shorts/abc123',
+    'https://www.youtube.com/',
+  ];
+  for (const url of isCall) assert.strictEqual(isProviderNonContentPath(url), false, url);
+  for (const url of isNotCall) assert.strictEqual(isProviderNonContentPath(url), true, url);
+});
+
+check('provider paths: hosts with no content rule are unaffected', () => {
+  for (const url of [
+    'https://edge.media-server.com/mmc/p/wwjhstmr/',
+    'https://event.choruscall.com/mediaframe/webcast.html?webcastid=X',
+    'https://app.webinar.net/zD8Z0G23Mjg',
+    'https://us02web.zoom.us/j/83171321596',
+  ]) {
+    assert.strictEqual(isProviderNonContentPath(url), false, url);
+  }
+});
+
 // -------------------------------------------------- start-aware retry schedule
 check('retry: the old schedule spent every attempt before the call opened', () => {
   // The failure this exists to prevent, reconstructed. SLHN.SW 2026Q2: dispatched at T-15 for an
@@ -2086,22 +2140,58 @@ check('retry: attempts now fill the window and the last lands about a minute bef
   assert.ok(landings[0] > landings[1] && landings[1] > landings[2], 'attempts must march towards the start');
 });
 
-check('retry: an attempt is never scheduled past the start, at any window width', () => {
-  // Past the start is refused as late by shouldSkipAsLate, so a delay that overshoots does not
-  // merely arrive late - it throws the attempt away.
+check('retry: no attempt is scheduled at or past the start for any realistic window', () => {
   const MIN = 60 * 1000;
-  for (const windowMin of [2, 3, 5, 8, 12, 15, 20, 30, 45]) {
+  for (let windowMin = 3; windowMin <= 60; windowMin++) {
     let msUntilStart = windowMin * MIN;
     for (let attempt = 1; attempt <= 3; attempt++) {
       const delay = retryDelayMsFor({ attempts: attempt, maxAttempts: 4, msUntilStart });
       msUntilStart -= delay;
-      if (msUntilStart <= 0) {
-        // Only acceptable once the exponential floor is what forced it - a narrow window has no
-        // room to spread, and the old behaviour is then correct.
-        assert.ok(windowMin <= 3, `window ${windowMin} min overshot the start on attempt ${attempt + 1}`);
-      }
+      assert.ok(
+        msUntilStart >= 30 * 1000,
+        `window ${windowMin} min: attempt ${attempt + 1} lands at T${(msUntilStart / MIN).toFixed(2)} min`
+      );
     }
   }
+});
+
+check('retry: a window too small for four attempts is honestly out of room', () => {
+  const MIN = 60 * 1000;
+  const overshot = [];
+  for (const windowMin of [1, 2, 3]) {
+    let msUntilStart = windowMin * MIN;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      msUntilStart -= retryDelayMsFor({ attempts: attempt, maxAttempts: 4, msUntilStart });
+    }
+    if (msUntilStart <= 0) overshot.push(windowMin);
+  }
+  assert.deepStrictEqual(overshot, [1, 2], 'only the one- and two-minute windows may run out of room');
+});
+
+check('retry: never waits past the last useful moment even when the exponential is larger', () => {
+  const delay = retryDelayMsFor({ attempts: 3, maxAttempts: 4, msUntilStart: 100 * 1000 });
+  assert.ok(delay <= 70 * 1000, `expected the wait to be clamped, got ${delay}ms`);
+  assert.ok(delay > 0);
+});
+
+check('retry: lateStartGraceMinutes actually extends the schedule', () => {
+  const MIN = 60 * 1000;
+  const lastLanding = (graceMin) => {
+    let msUntilStart = 15 * MIN;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      msUntilStart -= retryDelayMsFor({
+        attempts: attempt,
+        maxAttempts: 4,
+        msUntilStart,
+        lateGraceMs: graceMin * MIN,
+      });
+    }
+    return msUntilStart / MIN;
+  };
+  assert.ok(lastLanding(0) > 0, 'with no grace the last attempt stays before the start');
+  assert.ok(lastLanding(3) < 0, 'with three minutes of grace it lands after the start');
+  assert.ok(lastLanding(3) > -3, 'but still inside the grace it was given');
+  assert.ok(lastLanding(5) < lastLanding(3), 'more grace lands later');
 });
 
 check('retry: falls back to the plain exponential when there is nothing to spread over', () => {
@@ -2177,9 +2267,26 @@ check('drift: real provider journeys that must NOT be called drifts', () => {
     ['https://www.company.com/financial-reports', 'https://www.company.com/presentations/interim-2026'],
     // q4inc's analyst-to-attendee rewrite keeps the event id.
     ['https://events.q4inc.com/analyst/2026-q2-847392', 'https://events.q4inc.com/attendee/2026-q2-847392'],
+    ['https://company.com/events/detail/88420190', 'https://company.com/webcast/live'],
+    ['https://company.com/ir/event/20260901234', 'https://company.com/live-audio'],
+    ['https://ir.company.com/detail/2026090112345', 'https://ir.company.com/webcast'],
   ];
   for (const [dial, landed] of journeys) {
     assert.strictEqual(driftedWithinHost(landed, dial), false, `${dial} -> ${landed}`);
+  }
+});
+
+check('drift: two different events on one provider are caught', () => {
+  const pairs = [
+    ['https://www.youtube.com/live/1VdQLNMxZh0', 'https://www.youtube.com/live/LPJoiDiVkTI'],
+    [
+      'https://event.choruscall.com/mediaframe/webcast.html?webcastid=8agceY7Q',
+      'https://event.choruscall.com/mediaframe/webcast.html?webcastid=Uuzx0erS',
+    ],
+    ['https://edge.media-server.com/mmc/p/wwjhstmr/', 'https://edge.media-server.com/mmc/p/oc2xc3d6/'],
+  ];
+  for (const [dial, landed] of pairs) {
+    assert.strictEqual(driftedWithinHost(landed, dial), true, `${dial} -> ${landed}`);
   }
 });
 

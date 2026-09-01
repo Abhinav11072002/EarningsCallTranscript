@@ -87,7 +87,10 @@ function idTokens(url) {
 // ever looks at movement WITHIN one host.
 function driftedWithinHost(url, dialinUrl) {
   const expected = idTokens(dialinUrl);
-  if (!expected.length) return false; // the portal gave us no identifier to hold on to
+  if (!expected.length) return false;
+
+  if (!idTokens(url).length) return false;
+
   const here = `${url}`.toLowerCase();
   return !expected.some((token) => here.includes(token.toLowerCase()));
 }

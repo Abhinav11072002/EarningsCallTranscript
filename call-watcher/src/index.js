@@ -280,7 +280,8 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
     // minutesRemaining, not minutesUntilCall: the latter re-parses the countdown TEXT, which
     // was frozen at scrape time, so this guard silently never fired. See tableWatcher.stampDueAt.
     const minsLeftNow = minutesRemaining(row);
-    if (minsLeftNow !== null && minsLeftNow <= 0) {
+    const lateGrace = Number(config.lateStartGraceMinutes ?? 0);
+    if (minsLeftNow !== null && minsLeftNow <= -lateGrace) {
       throw new Error(
         `Call started ${Math.abs(minsLeftNow).toFixed(1)} min ago while it was queued for the trigger - not joining late`
       );
@@ -337,6 +338,7 @@ function recordFailure(row, key, err, store, logger, obs, startedAt, resolvedUrl
     msUntilStart: row.dueAt ? row.dueAt - Date.now() : null,
     baseDelayMs: RETRY_BASE_DELAY_MS,
     maxDelayMs: RETRY_MAX_DELAY_MS,
+    lateGraceMs: Number(config.lateStartGraceMinutes ?? 0) * 60000,
   });
   logger.info(
     `Next attempt for ${row.symbol} ${row.fiscalPeriod} in ${Math.round(retryDelay / 1000)}s` +

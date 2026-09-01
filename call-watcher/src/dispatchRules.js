@@ -115,6 +115,7 @@ function retryDelayMsFor({
   msUntilStart = null,
   baseDelayMs = 30000,
   maxDelayMs = 10 * 60 * 1000,
+  lateGraceMs = 0,
 }) {
   const exponential = Math.min(baseDelayMs * 2 ** Math.max(0, attempts - 1), maxDelayMs);
 
@@ -123,15 +124,15 @@ function retryDelayMsFor({
   // old behaviour is the right behaviour.
   if (!attemptsLeft || msUntilStart === null || !Number.isFinite(msUntilStart)) return exponential;
 
-  const AIM_BEFORE_START_MS = 60 * 1000;
-  const usable = msUntilStart - AIM_BEFORE_START_MS;
-  // Less than a minute of usable window: there is no room to spread anything.
-  if (usable <= 0) return exponential;
+  const AIM_BEFORE_DEADLINE_MS = 60 * 1000;
+  const LATEST_BEFORE_DEADLINE_MS = 30 * 1000;
 
-  const spread = usable / attemptsLeft;
-  // The floor matters. A genuinely transient failure should not be made to wait minutes when the
-  // window is wide, and the exponential is what the retry cadence has always been.
-  return Math.max(exponential, Math.min(spread, maxDelayMs));
+  const msUntilDeadline = msUntilStart + Math.max(0, lateGraceMs);
+  const latestUseful = msUntilDeadline - LATEST_BEFORE_DEADLINE_MS;
+  if (latestUseful <= 0) return exponential;
+
+  const spread = (msUntilDeadline - AIM_BEFORE_DEADLINE_MS) / attemptsLeft;
+  return Math.min(Math.max(exponential, spread), maxDelayMs, latestUseful);
 }
 
 module.exports = { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor };

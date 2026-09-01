@@ -828,7 +828,21 @@ async function answerCustomComboboxes(frame, identity, logger) {
 // failure into a confusing one.
 const UNGUESSABLE_TYPES = ['password', 'number', 'date', 'datetime-local', 'time', 'month', 'week', 'url', 'file', 'color', 'range'];
 
-async function fillRequiredUnmatched(frame, identity, logger) {
+async function pageHasMediaElement(page) {
+  let frames = [];
+  try {
+    frames = page.frames();
+  } catch {
+    return true;
+  }
+  for (const frame of frames) {
+    const has = await frame.evaluate(() => Boolean(document.querySelector('audio, video'))).catch(() => false);
+    if (has) return true;
+  }
+  return false;
+}
+
+async function fillRequiredUnmatched(frame, identity, logger, allowSelfIdentifying = false) {
   const fields = await frame.$$('input:visible, textarea:visible').catch(() => []);
   let filled = 0;
 
@@ -850,17 +864,8 @@ async function fillRequiredUnmatched(frame, identity, logger) {
     // answer for one is never worth the risk of posting it to the call.
     if ((await el.evaluate((node) => node.tagName.toLowerCase()).catch(() => '')) === 'textarea') continue;
 
-    // An email or phone box is SELF-IDENTIFYING: its type attribute says what belongs in it, so
-    // it does not need a required marker to be worth filling. The asterisk rule below exists to
-    // stop us inventing "Other" for boxes we do not understand, and neither of these is that.
-    //
-    // SY 2026Q2 was lost to the gap. webinar.net's "Log In Now" gate is a single
-    // <input type="email"> with no name, no id, no placeholder and no label - the type is its
-    // entire description - and with no asterisk anywhere near it, the only field on the page was
-    // skipped four times running. The page title never changed from "webinar.net".
-    //
-    // Furniture is already excluded above, so a footer newsletter box cannot reach this.
-    const selfIdentifying = type === 'email' ? identity.email : type === 'tel' ? identity.phone : null;
+    const typedValue = type === 'email' ? identity.email : type === 'tel' ? identity.phone : null;
+    const selfIdentifying = allowSelfIdentifying ? typedValue : null;
 
     let required = Boolean(selfIdentifying);
     if (!required) {
@@ -898,7 +903,7 @@ async function fillRequiredUnmatched(frame, identity, logger) {
     }
     if (!required) continue;
 
-    const value = selfIdentifying || identity.fallbackAnswer || 'Other';
+    const value = typedValue || identity.fallbackAnswer || 'Other';
 
     const label = description.trim().slice(0, 60) || 'an unlabelled field';
     const ok = await el
@@ -1451,6 +1456,7 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
       break;
     }
     let acted = false;
+    const nothingToPlay = !(await pageHasMediaElement(page));
     for (const frame of registrationFrames(page)) {
       const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
       const buttons = await frame.$$(CLICKABLE_SELECTOR).catch(() => []);
@@ -1475,15 +1481,7 @@ async function fillRegistrationForm(page, identity, logger, onPageChanged, strat
       await checkRequiredConsent(frame, logger);
       await answerConsentRadios(frame, logger);
       await tickWaiverCheckboxes(frame, logger);
-      // Last, so it only ever sees what everything else declined to answer.
-      //
-      // COUNTED, like every other filler above it. Discarding this number meant a page whose
-      // only field is answered here looked untouched: `committed` stayed false, the click step
-      // was restricted to registration-worded buttons, and the form was filled and then never
-      // submitted. SY 2026Q2 is the case - a lone <input type="email"> and a button reading
-      // "Attend", which is not registration wording - and the log said "Controls present but
-      // none looked like a registration step" on a page whose gate we had just filled in.
-      filledCount += await fillRequiredUnmatched(frame, identity, logger);
+      filledCount += await fillRequiredUnmatched(frame, identity, logger, nothingToPlay);
       // `lastAction` matters as much as `filledCount` here, and only on a form split across
       // steps. The second step often has NOTHING to type - just a confirmation and a button -
       // so filledCount is 0 there, which used to restrict the click to registration-worded

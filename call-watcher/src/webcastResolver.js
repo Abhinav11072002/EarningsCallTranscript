@@ -68,6 +68,23 @@ const NEVER_FOLLOW_PATTERN = /\breplays?\b|\barchived?\b|on-?demand|\bplaybacks?
 const NON_WEBCAST_PATH_PATTERN =
   /\/(privacy|terms|legal|cookie|gdpr|about|about-us|contact|contact-us|careers|jobs|support|help|faq|blog|resources|pricing|products|solutions|company|press|newsroom|sitemap|accessibility|imprint)(?:[-_/]|$|\?|#)/i;   // the terminator allows a hyphen, so "terms-of-use" is caught too
 
+const HOST_CONTENT_PATHS = [
+  { host: 'youtube.com', content: /^\/(watch|live|embed|v)(?:\/|$|\?)/i },
+];
+
+function isProviderNonContentPath(url) {
+  try {
+    const parsed = new URL(url);
+    for (const rule of HOST_CONTENT_PATHS) {
+      const onHost = parsed.hostname === rule.host || parsed.hostname.endsWith(`.${rule.host}`);
+      if (onHost && !rule.content.test(parsed.pathname)) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function isNonWebcastPath(url) {
   try {
     const parsed = new URL(url);
@@ -86,7 +103,9 @@ function isNonWebcastPath(url) {
 // furniture needs excluding.
 function isFurniturePath(url) {
   try {
-    return NON_WEBCAST_PATH_PATTERN.test(new URL(url).pathname);
+    const segments = new URL(url).pathname.split('/').filter(Boolean);
+    if (!segments.length) return false;
+    return NON_WEBCAST_PATH_PATTERN.test(`/${segments[segments.length - 1]}`);
   } catch {
     return true;
   }
@@ -153,6 +172,7 @@ async function findKnownProviderLink(page, config, hints) {
     if (!knownHost && !shapeMatches) continue;
     if (isAssetUrl(absolute)) continue;
     if (isNonWebcastPath(absolute)) continue;
+    if (isProviderNonContentPath(absolute)) continue;
     const text = ((await a.innerText().catch(() => '')) || '').trim();
     // Refused outright, not merely marked down. A replay is a recording of a call that has
     // already happened, and following one produces a transcript of the wrong event that looks
@@ -223,7 +243,7 @@ async function findNavigationalLink(page, hints) {
 // navigated to) a resolved webcast page.
 async function tryResolveOnCurrentPage(page, config, logger, hints) {
   const hostname = new URL(page.url()).hostname;
-  if (hostnameMatches(page.url(), config.knownDirectProviderDomains)) {
+  if (hostnameMatches(page.url(), config.knownDirectProviderDomains) && !isProviderNonContentPath(page.url())) {
     logger.info(`Webcast resolved directly (known provider domain: ${hostname})`);
     return true;
   }
@@ -355,4 +375,4 @@ async function resolveWebcastPage(context, dialinUrl, config, logger, hints) {
   return page;
 }
 
-module.exports = { resolveWebcastPage, isNonWebcastPath };
+module.exports = { resolveWebcastPage, isNonWebcastPath, isProviderNonContentPath, isFurniturePath };
