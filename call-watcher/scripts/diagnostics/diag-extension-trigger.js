@@ -5,17 +5,12 @@
 // Reach for it when captures stop starting and you need to know whether the fault is in
 // finding the call or in triggering the extension. Runs the trigger step alone - bring tab to
 // front, send the shortcut, find the popup over CDP, fill it, click Start, confirm the stream -
-// skipping resolution and registration entirely.
-//
-// The target defaults to the PORTAL tab, which is wrong for an end-to-end rehearsal: the portal
-// has no player, so the relevance guard refuses before the keystroke is ever sent. Name the tab
-// you actually want with --tab=<substring of its URL>.
+// against whatever tab is in front, skipping resolution and registration entirely.
 //
 // WARNING: this one DOES start a real transcription, so it posts to the live backend. Use a
 // throwaway symbol and stop the stream afterwards.
 //
 // Usage: node scripts/diagnostics/diag-extension-trigger.js TEST 2026 Q1
-//        node scripts/diagnostics/diag-extension-trigger.js TEST 2026 Q1 --tab=trigger-test.html
 
 const { chromium } = require('playwright-core');
 const { loadConfig } = require('../../src/loadConfig');
@@ -23,14 +18,9 @@ const { loadConfig } = require('../../src/loadConfig');
 const config = loadConfig();
 const { triggerExtension } = require('../../src/extensionTrigger');
 
-const args = process.argv.slice(2);
-const tabFlag = args.find((a) => a.startsWith('--tab='));
-const tabMatch = tabFlag ? tabFlag.slice('--tab='.length) : 'financialmodelingprep.com';
-const [symbol, year, period] = args.filter((a) => !a.startsWith('--'));
+const [symbol, year, period] = process.argv.slice(2);
 if (!symbol || !year || !period) {
-  console.error(
-    'Usage: node scripts/diagnostics/diag-extension-trigger.js <SYMBOL> <YEAR> <PERIOD> [--tab=<url substring>]'
-  );
+  console.error('Usage: node scripts/test-extension-trigger.js <SYMBOL> <YEAR> <PERIOD>');
   process.exit(1);
 }
 
@@ -44,14 +34,12 @@ const logger = {
   const browser = await chromium.connectOverCDP(config.cdpUrl);
   const context = browser.contexts()[0];
   context.on('dialog', (dialog) => dialog.dismiss().catch(() => {}));
-  const targetPage = context.pages().find((p) => p.url().includes(tabMatch));
+  const portalPage = context.pages().find((p) => p.url().includes('financialmodelingprep.com'));
 
-  if (!targetPage) {
-    console.error(`Could not find a tab whose URL contains "${tabMatch}". Open tabs:`);
-    for (const p of context.pages()) console.error(`  ${p.url()}`);
+  if (!portalPage) {
+    console.error('Could not find the admin portal tab.');
     process.exit(1);
   }
-  console.log(`Target tab: ${targetPage.url()}`);
 
   const row = { symbol, fiscalPeriod: `${year}${period}` };
   const start = Date.now();
@@ -59,7 +47,7 @@ const logger = {
 
   let failed = false;
   try {
-    await triggerExtension(context, targetPage, row, config, logger);
+    await triggerExtension(context, portalPage, row, config, logger);
     console.log(`SUCCESS in ${((Date.now() - start) / 1000).toFixed(1)}s`);
   } catch (err) {
     console.log(`FAILED after ${((Date.now() - start) / 1000).toFixed(1)}s: ${err.message}`);
