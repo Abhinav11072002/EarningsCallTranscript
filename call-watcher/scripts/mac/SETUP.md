@@ -417,7 +417,12 @@ Red chips appear only when a warning flag is set: table empty, no dial-in links,
 queue backlog, tabs leaking, cannot read streams, Chrome disconnected. No chips is the normal
 state.
 
-`?day=YYYY-MM-DD` shows a past day instead of today.
+The header carries a **date picker** with previous/next/today, and a **theme** button cycling
+auto (follow macOS) / light / dark - the choice is remembered per browser. `?day=YYYY-MM-DD` still
+works directly in the URL.
+
+The footer shows `v2 - <commit> - page <timestamp>`. If there is no version line there, the browser
+is holding an older copy of the page and needs a reload.
 
 ### Two machines on one page
 
