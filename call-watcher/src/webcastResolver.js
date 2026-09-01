@@ -79,6 +79,19 @@ function isNonWebcastPath(url) {
   }
 }
 
+// The same check WITHOUT the bare-homepage rule, for links we found by their wording rather than
+// by their destination. Some providers serve the call from the root with the event in the query
+// string - `https://host/?id=1234` - so refusing every path of "/" would throw away real calls.
+// A link that says "Listen to the webcast" has already told us what it is; only the corporate
+// furniture needs excluding.
+function isFurniturePath(url) {
+  try {
+    return NON_WEBCAST_PATH_PATTERN.test(new URL(url).pathname);
+  } catch {
+    return true;
+  }
+}
+
 function hostnameMatches(url, domains) {
   try {
     const hostname = new URL(url).hostname;
@@ -241,7 +254,6 @@ async function tryResolveOnCurrentPage(page, config, logger, hints) {
       continue;
     }
 
-    logger.info(`Found candidate webcast link via text match: "${text}"`);
     const href = await el.getAttribute('href').catch(() => null);
     if (href) {
       let absolute;
@@ -250,9 +262,30 @@ async function tryResolveOnCurrentPage(page, config, logger, hints) {
       } catch {
         continue; // malformed href - keep scanning instead of aborting
       }
+      // The guards the other two link paths already had, and this one did not. This path matches
+      // on WORDING ALONE, which is the loosest test in the resolver, and by attempt 4 the wording
+      // is as loose as "here" or "access" - so it was the only route left by which resolution
+      // could still land on a file instead of a call.
+      //
+      // It did, twice over on 2026-09-01: AED.BR and AEDFF resolved to
+      // AED_Slides_H1-2026_Webcast_2026-09-01_LV.pdf - a slide deck whose FILENAME contains
+      // "Webcast" - and the corpcam calls to CorpcamPrivacy.pdf. Four calls lost between them,
+      // and a PDF viewer tab is the dangerous kind of failure: it opens, it renders, and had
+      // there been a player anywhere near it we would have recorded silence and called it a
+      // success.
+      if (isAssetUrl(absolute)) {
+        logger.info(`Ignoring "${text}" - it points at a file (${absolute}), not a page.`);
+        continue;
+      }
+      if (isFurniturePath(absolute)) {
+        logger.info(`Ignoring "${text}" - ${absolute} is site furniture, not a call.`);
+        continue;
+      }
+      logger.info(`Found candidate webcast link via text match: "${text}"`);
       await page.goto(absolute, { waitUntil: 'domcontentloaded', timeout: 30000 });
       return true;
     }
+    logger.info(`Found candidate webcast control via text match: "${text}"`);
     // A click that fails used to be swallowed and still reported as a successful resolution,
     // so the pipeline recorded the UN-clicked landing page. Common causes: the element is
     // covered by a cookie/consent overlay, or is outside a scroll container. Only treat this
@@ -269,6 +302,12 @@ async function tryResolveOnCurrentPage(page, config, logger, hints) {
     await page.waitForLoadState('domcontentloaded').catch(() => {});
     if (page.url() === before && !(await findEmbeddedProviderFrame(page, config).catch(() => null))) {
       logger.warn(`Clicking "${text}" changed nothing; continuing to look.`);
+      continue;
+    }
+    // A script-driven click has no href to vet in advance, so it is vetted afterwards and undone.
+    if (isAssetUrl(page.url())) {
+      logger.warn(`Clicking "${text}" opened a file (${page.url()}); going back and continuing to look.`);
+      await page.goBack({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
       continue;
     }
     return true;

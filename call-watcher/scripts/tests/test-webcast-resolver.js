@@ -56,6 +56,28 @@ function startServer() {
       if (url === '/events-index') {
         return send(`<h1>Events</h1><a href="${provider('/player')}">Listen to Webcast</a>`);
       }
+      if (url === '/AED_Slides_H1-2026_Webcast_2026-09-01_LV.pdf' || url === '/CorpcamPrivacy.pdf') {
+        res.writeHead(200, { 'content-type': 'application/pdf' });
+        return res.end('%PDF-1.4 fake');
+      }
+      if (url === '/cta-to-own-pdf') {
+        // AED.BR and AEDFF, 2026-09-01. A slide deck whose FILENAME contains "Webcast", labelled
+        // with wording the CTA matcher accepts, on the company's own host so the provider-domain
+        // scan never sees it. Both calls resolved to the PDF and were lost.
+        return send('<h1>H1 2026 Results</h1><a href="/AED_Slides_H1-2026_Webcast_2026-09-01_LV.pdf">Audio webcast</a>');
+      }
+      if (url === '/cta-to-privacy') {
+        // The corpcam shape: the only wording match on the page points at site furniture.
+        return send('<h1>Webcast</h1><a href="/privacy-policy">Listen to the webcast</a>');
+      }
+      if (url.startsWith('/?event=')) {
+        // Proof the furniture rule does not over-reach: plenty of providers serve the call from
+        // the ROOT with the event in the query string, and those must still be followed.
+        return send('<title>Q2 2026 Earnings Call</title><h1>Live player</h1>');
+      }
+      if (url === '/cta-to-root-query') {
+        return send(`<h1>Results</h1><a href="http://localhost:${server.address().port}/?event=123">Listen to Webcast</a>`);
+      }
       if (url === '/pdf-only') {
         // The only provider-domain link is a slide deck. Recording this is silently wrong.
         return send(`<h1>Results</h1><a href="${provider('/deck.pdf')}">Q2 2026 Earnings Presentation</a>`);
@@ -134,6 +156,24 @@ function startServer() {
       start: ir('/needs-nav-hop'),
       expect: (u) => u === prov('/player'),
       why: 'hops to the events index, then resolves the player',
+    },
+    {
+      name: 'CTA wording pointing at a PDF on the same host as the landing page',
+      start: ir('/cta-to-own-pdf'),
+      expect: (u) => u === ir('/cta-to-own-pdf'),
+      why: 'must not follow wording to a file - AED.BR and AEDFF were lost to exactly this',
+    },
+    {
+      name: 'CTA wording pointing at site furniture',
+      start: ir('/cta-to-privacy'),
+      expect: (u) => u === ir('/cta-to-privacy'),
+      why: 'a privacy page is not a call, however the link is labelled',
+    },
+    {
+      name: 'CTA wording pointing at a root path with a query string',
+      start: ir('/cta-to-root-query'),
+      expect: (u) => u.includes('/?event=123'),
+      why: 'the furniture rule must not refuse a call served from the root',
     },
     {
       name: 'long footer branding containing the word "webcast"',
