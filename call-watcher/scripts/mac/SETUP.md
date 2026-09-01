@@ -432,7 +432,13 @@ Use the other machine's LAN address, with the scheme. A peer that cannot be reac
 `unreachable` rather than silently omitted, which is the point - a machine whose watcher is down
 records nothing and nothing else raises an alarm about it.
 
-`DASHBOARD_PEERS=http://host:8477,http://other:8477` overrides the config for one run.
+With peers reachable, **Upcoming** merges both machines' schedules into one time-ordered list with
+a **Machine** column, this machine's rows outlined. Without peers it shows only this machine's
+share and says so - which is correct either way, because the watcher only ever writes its own
+share to `upcoming.json`.
+
+`DASHBOARD_PEERS=http://host:8477,http://other:8477` overrides the config for one run, and
+`DASHBOARD_DATA=/path/to/data` points a dashboard at a different data directory.
 
 ### Before you expose it
 

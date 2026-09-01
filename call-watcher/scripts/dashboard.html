@@ -201,6 +201,11 @@
   .tag.soon { color: var(--info); background: var(--infobg); border-color: var(--info); }
   .tag.nolink { color: var(--muted); background: var(--surface2); border-color: var(--line2); }
 
+  table:not(.has-peers) .owner { display: none; }
+  td.owner { white-space: nowrap; }
+  .who { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--line2); background: var(--surface2); color: var(--ink2); display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+  .who.mine { border-color: var(--info); background: var(--infobg); color: var(--info); }
+
   .bar { height: 4px; border-radius: 2px; background: var(--line2); overflow: hidden; min-width: 46px; margin-top: 4px; }
   .bar > span { display: block; height: 100%; background: var(--info); }
 
@@ -273,10 +278,10 @@
   </section>
 
   <section>
-    <h2>Upcoming <span class="count" id="upcomingCount"></span></h2>
+    <h2>Upcoming <span class="count" id="upcomingCount"></span><span class="count" id="upcomingScope"></span></h2>
     <div class="scroll"><table>
-      <thead><tr><th>Symbol</th><th>Period</th><th>Starts in</th><th>At</th><th>State</th><th>Link</th></tr></thead>
-      <tbody id="upcoming"><tr><td colspan="6" class="empty">waiting for the watcher</td></tr></tbody>
+      <thead><tr><th>Symbol</th><th>Period</th><th class="owner">Machine</th><th>Starts in</th><th>At</th><th>State</th><th>Link</th></tr></thead>
+      <tbody id="upcoming"><tr><td colspan="7" class="empty">waiting for the watcher</td></tr></tbody>
     </table></div>
   </section>
 
@@ -404,27 +409,56 @@ function upcomingState(row, msLeft, threshold) {
   return ['waiting', 'waiting'];
 }
 
-function renderUpcoming(state) {
-  const rows = (state.upcoming || []).filter((r) => r.dueAt);
+function shortHost(name) {
+  return String(name || '').split('.')[0];
+}
+
+function renderUpcoming(state, peerStates) {
   const threshold = Number(state.thresholdMinutes) || 15;
+  const reachable = (peerStates || []).filter((p) => p.state);
+  const sharded = state.shard && state.shard.count > 1;
+
+  const rows = (state.upcoming || [])
+    .filter((r) => r.dueAt)
+    .map((r) => ({ row: r, owner: state.machine, mine: true }));
+
+  for (const peer of reachable) {
+    for (const r of peer.state.upcoming || []) {
+      if (r.dueAt) rows.push({ row: r, owner: peer.state.machine, mine: false });
+    }
+  }
+  rows.sort((a, b) => a.row.dueAt - b.row.dueAt);
+
+  const table = el('upcoming').closest('table');
+  if (reachable.length) table.classList.add('has-peers');
+  else table.classList.remove('has-peers');
+
   el('upcomingCount').textContent = rows.length ? rows.length + ' in the window' : '';
+  el('upcomingScope').textContent = reachable.length
+    ? 'all machines'
+    : sharded
+      ? 'this machine only - set peerDashboards to see the other'
+      : '';
 
   if (!rows.length) {
     el('upcoming').innerHTML =
-      '<tr><td colspan="6" class="empty">' +
+      '<tr><td colspan="7" class="empty">' +
       (state.upcomingAt ? 'nothing scheduled in the window' : 'waiting for the watcher to write upcoming.json') +
       '</td></tr>';
     return;
   }
 
   el('upcoming').innerHTML = rows
-    .map((r) => {
+    .map((entry) => {
+      const r = entry.row;
       const msLeft = r.dueAt - Date.now();
       const parts = upcomingState(r, msLeft, threshold);
       return (
         '<tr>' +
         '<td class="sym">' + esc(r.symbol) + '</td>' +
         '<td>' + esc(r.fiscalPeriod) + '</td>' +
+        '<td class="owner"><span class="who' + (entry.mine ? ' mine' : '') + '" title="' + esc(entry.owner) + '">' +
+        esc(shortHost(entry.owner)) + '</span></td>' +
         '<td class="' + (msLeft < 0 ? 'when' : 'num') + '" data-due="' + r.dueAt + '">' + countdown(msLeft) + '</td>' +
         '<td class="when">' + new Date(r.dueAt).toTimeString().slice(0, 5) + '</td>' +
         '<td><span class="tag ' + parts[0] + '">' + esc(parts[1]) + '</span></td>' +
@@ -577,20 +611,21 @@ async function refresh() {
     return;
   }
 
+  const peerStates = state.peers && state.peers.length ? await fetchPeers(state.peers) : [];
+
   renderHeader(state);
   renderChips(state);
   renderCards(state);
-  renderUpcoming(state);
+  renderUpcoming(state, peerStates);
   renderCalls(state);
   renderNext(state);
   el('footDay').textContent = state.day + ' · threshold ' + state.thresholdMinutes + ' min';
   el('footRefresh').textContent = 'refreshed ' + clock(state.now);
 
-  if (state.peers && state.peers.length) {
-    const peerStates = await fetchPeers(state.peers);
+  if (peerStates.length) {
     renderMachines(state, peerStates);
     const down = peerStates.filter((p) => !p.state).length;
-    el('footPeers').textContent = down ? down + ' peer unreachable' : state.peers.length + ' peer reachable';
+    el('footPeers').textContent = down ? down + ' peer unreachable' : peerStates.length + ' peer reachable';
   } else {
     el('machinesWrap').hidden = true;
     el('footPeers').textContent = '';

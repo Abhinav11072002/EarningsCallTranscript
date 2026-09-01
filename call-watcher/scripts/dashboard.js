@@ -5,7 +5,7 @@ const path = require('path');
 const { loadConfig } = require('../src/loadConfig');
 const { readShard, describeShard } = require('../src/shard');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.DASHBOARD_DATA || path.join(__dirname, '..', 'data');
 const PAGE_PATH = path.join(__dirname, 'dashboard.html');
 const LOG_TAIL_BYTES = 256 * 1024;
 const STALE_HEARTBEAT_MS = 90 * 1000;
