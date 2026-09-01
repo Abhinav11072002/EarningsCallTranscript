@@ -179,7 +179,28 @@ async function findNavigationalLink(page, hints) {
     if (text.length > ctaTextLimit || !navPattern.test(text)) continue;
     const href = await a.getAttribute('href').catch(() => null);
     if (!href) continue;
-    return new URL(href, page.url()).toString();
+
+    let absolute;
+    try {
+      absolute = new URL(href, page.url()).toString();
+    } catch {
+      continue;
+    }
+
+    // The same three refusals the candidate scan applies. This matched on link TEXT alone, and
+    // followed whatever it pointed at - six calls in one morning went to a PDF:
+    //
+    //   AED.BR, AEDFF   AED_Slides_H1-2026_Webcast_2026-09-01_LV.pdf   matched on "Webcast"
+    //   SHP.JO, SRHGF,
+    //   SSL, SOL.JO     CorpcamPrivacy.pdf
+    //
+    // Four attempts each, on a slide deck and a privacy policy. ASSET_PATH_PATTERN already
+    // listed pdf; it was simply never consulted on this path.
+    if (isAssetUrl(absolute)) continue;
+    if (isNonWebcastPath(absolute)) continue;
+    if (NEVER_FOLLOW_PATTERN.test(`${text} ${absolute}`)) continue;
+
+    return absolute;
   }
   return null;
 }
