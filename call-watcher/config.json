@@ -45,8 +45,8 @@
     "q4inc.com",
     "notified.com",
     "on24.com",
-    "qcnl.tv",
-    "webinar.net"
+    "webinar.net",
+    "youtube.com"
   ],
   "maxConcurrentPreparations": 3,
   "prepareDeadlineMs": 120000,

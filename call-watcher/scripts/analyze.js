@@ -41,6 +41,16 @@ const CAUSES = [
     action: 'Run: node scripts/diagnostics/diag-form-fields.js <url> - it shows which field is left empty',
   },
   {
+    match: /will EMAIL the join link/i,
+    cause: 'Provider emails the join link (nothing to join in a browser)',
+    action: 'Not a fault and not fixable here - it needs a mailbox the watcher can read',
+  },
+  {
+    match: /different event on the same provider/i,
+    cause: 'Resolution drifted to another event on the same provider',
+    action: 'A wrong-call recording was PREVENTED here; check the portal link points at this call',
+  },
+  {
     match: /no audio or video player/i,
     cause: 'Page had no player (never joined, or telephone-only)',
     action: 'Check whether the provider offers a browser stream at all; Chorus Call Diamond Pass does not',

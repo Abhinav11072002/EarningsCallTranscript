@@ -25,7 +25,7 @@ const { SeenLog, reconcile, formatReconciliation } = require('../../src/reconcil
 const { blindReason } = require('../../src/supervisorRules');
 const { matchField } = require('../../src/formFiller');
 const { validateConfig } = require('../../src/validateConfig');
-const { judgeRelevance, symbolAppearsAsWord } = require('../../src/pageRelevance');
+const { judgeRelevance, driftedWithinHost, symbolAppearsAsWord } = require('../../src/pageRelevance');
 const { strategyForAttempt, BASE } = require('../../src/retryStrategy');
 const { parseSendKeys, toAppleScriptModifiers, toAppleScriptArgs, describeShortcut } = require('../../src/shortcutKeys');
 const { macCommand, windowsCommand } = require('../../src/preflight');
@@ -2050,6 +2050,116 @@ check('providerRules: Diamond Pass covers every host shape it appears under', ()
   }
   // And its webcast sibling, which does carry audio, must stay usable.
   assert.strictEqual(telephoneOnlyReason('https://webcast.choruscall.com/webcast.html?id=x'), null);
+});
+
+check('relevance: an emailed join link is named as such, not reported as a missing player', () => {
+  // SLHN.SW / SWSDF 2026Q2, live page text. Four attempts each, all reported "no player", which
+  // reads as a fault in this code. It is not one: the registration succeeded and Chorus Call
+  // emailed the link to the dummy identity.
+  const verdict = judgeRelevance({
+    title: 'Thank You! | Swiss Life Presentation of the Half Year results 2026',
+    url: 'https://event.choruscall.com/mediaframe/thankYou?webcastid=Uuzx0erS',
+    text: 'Thank you for registering. You will receive a confirmation email with additional information about this event.',
+    hasPlayer: false,
+    symbol: 'SLHN',
+    year: '2026',
+    period: 'Q2',
+    dialinUrl: 'https://event.choruscall.com/mediaframe/webcast.html?webcastid=Uuzx0erS',
+  });
+  assert.strictEqual(verdict.accepted, false);
+  assert.match(verdict.reason, /will EMAIL the join link/);
+});
+
+check('relevance: a confirmation page that ALSO has a player is still recorded', () => {
+  // Plenty of providers say "you will receive a confirmation email" on the very page that then
+  // plays the call. The emailed-link refusal must only apply where there is nothing to play.
+  const verdict = judgeRelevance({
+    title: 'ACME Q2 2026 Earnings Call',
+    url: 'https://edge.media-server.com/mmc/p/abc12345/',
+    text: 'You will receive a confirmation email. The webcast begins shortly.',
+    hasPlayer: true,
+    symbol: 'ACME',
+    year: '2026',
+    period: 'Q2',
+    dialinUrl: 'https://edge.media-server.com/mmc/p/abc12345/',
+  });
+  assert.strictEqual(verdict.accepted, true);
+});
+
+// ------------------------------------------------- drift within a provider
+check('relevance: refuses a different event on the same provider', () => {
+  // MDT 2027Q1. The portal pointed at Medtronic's video; resolution ended on Alphabet's, and
+  // "a player, and Q1" was enough to accept it. The transcript was filed as a success.
+  const verdict = judgeRelevance({
+    title: 'Alphabet 2026 Q1 Earnings Call - YouTube',
+    url: 'https://www.youtube.com/live/LPJoiDiVkTI',
+    hasPlayer: true,
+    symbol: 'MDT',
+    year: '2027',
+    period: 'Q1',
+    dialinUrl: 'https://www.youtube.com/live/1VdQLNMxZh0',
+  });
+  assert.strictEqual(verdict.accepted, false);
+  assert.match(verdict.reason, /different event on the same provider/);
+});
+
+check('relevance: same event on the same provider is not a drift', () => {
+  const verdict = judgeRelevance({
+    title: 'Medtronic Q1 FY2027 Earnings Call - YouTube',
+    url: 'https://www.youtube.com/live/1VdQLNMxZh0',
+    hasPlayer: true,
+    symbol: 'MDT',
+    year: '2027',
+    period: 'Q1',
+    dialinUrl: 'https://www.youtube.com/live/1VdQLNMxZh0',
+  });
+  assert.strictEqual(verdict.accepted, true);
+});
+
+check('drift: real provider journeys that must NOT be called drifts', () => {
+  // Every one of these is a move the providers actually make, taken from captures that worked.
+  // A rule that refuses any of them would lose calls that are currently recorded.
+  const journeys = [
+    // Zoom keeps the meeting id when it swaps to the web client.
+    ['https://us02web.zoom.us/j/83171321596?pwd=qpoCCe0T8xBEsZvO4Tn5bwnQk33BxL.1',
+     'https://us02web.zoom.us/wc/83171321596/join'],
+    // Chorus Call keeps the webcastid through registration.
+    ['https://event.choruscall.com/mediaframe/webcast.html?webcastid=8agceY7Q',
+     'https://event.choruscall.com/mediaframe/thankYou?webcastid=8agceY7Q'],
+    // media-server appends a fragment and a trailing slash.
+    ['https://edge.media-server.com/mmc/p/wwjhstmr/',
+     'https://edge.media-server.com/mmc/p/wwjhstmr/#Presentation_6'],
+    // Leaving the host entirely is the normal IR-page case, not a drift.
+    ['https://www.corpcam.com/Sasol01092026',
+     'https://presentations.corpcam.com/RegistrationPage.aspx?id=Sasol01092026'],
+    // A dial-in link with no identifier at all cannot be drifted from.
+    ['https://example.com/investors', 'https://example.com/events/q2-2026-webcast'],
+    // Ordinary hops on a company's own site. None of these keeps a token, and refusing them
+    // would lose calls that resolution currently finds.
+    ['https://www.company.com/investor-relations', 'https://www.company.com/events/q2-2026-earnings'],
+    ['https://ir.company.com/ir/2026-half-year-results', 'https://ir.company.com/webcasts/live-audio'],
+    ['https://www.company.com/news-events/events', 'https://www.company.com/quarterly-results/q2-fy26'],
+    ['https://www.company.com/financial-reports', 'https://www.company.com/presentations/interim-2026'],
+    // q4inc's analyst-to-attendee rewrite keeps the event id.
+    ['https://events.q4inc.com/analyst/2026-q2-847392', 'https://events.q4inc.com/attendee/2026-q2-847392'],
+  ];
+  for (const [dial, landed] of journeys) {
+    assert.strictEqual(driftedWithinHost(landed, dial), false, `${dial} -> ${landed}`);
+  }
+});
+
+check('drift: a different id on the same host IS a drift', () => {
+  assert.strictEqual(
+    driftedWithinHost('https://www.youtube.com/live/LPJoiDiVkTI', 'https://www.youtube.com/live/1VdQLNMxZh0'),
+    true
+  );
+  assert.strictEqual(
+    driftedWithinHost(
+      'https://event.choruscall.com/mediaframe/webcast.html?webcastid=Uuzx0erS',
+      'https://event.choruscall.com/mediaframe/webcast.html?webcastid=8agceY7Q'
+    ),
+    true
+  );
 });
 
 // ---------------------------------------------------------------- sharding
