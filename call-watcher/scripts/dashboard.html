@@ -540,7 +540,7 @@ function renderCalls(state) {
   }
   el('calls').innerHTML = calls
     .map((c) => {
-      const manual = c.status === 'started' && c.startedBy === 'extension';
+      const manual = c.status === 'started' && (c.startedBy === 'extension' || c.startedBy === 'operator');
       const silent = c.status === 'started' && c.audioAudible === false && !manual;
       const tone = manual ? 'manual' : silent ? 'silent' : c.status === 'started' ? 'started' : 'failed';
       const word = manual ? 'recorded by hand' : silent ? 'silent' : c.status;

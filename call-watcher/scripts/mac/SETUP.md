@@ -407,6 +407,28 @@ that is the one thing on the page worth reacting to immediately.
 is a call the portal has not been given a dial-in link for; that is a data problem upstream, not a
 watcher problem.
 
+### When you start a call by hand
+
+If a form defeats the automation and you start the capture yourself from the popup, the watcher
+notices within one poll: it reads the extension's own list of active streams every 20 seconds, and
+a call it finds there is adopted as captured and written to the ledger as `recorded by hand`. You
+do not need to tell it anything.
+
+Two conditions. The stream has to still be running when it looks, and the Symbol, Year and Period
+you typed into the popup have to match the row exactly - matching is on those three fields.
+
+For a call that finished before the watcher could see it, assert it after the fact:
+
+```bash
+npm run mark-recorded -- LND 2027Q1
+npm run mark-recorded -- LND 2027Q1 --date=2026-09-04
+```
+
+That appends a `started` entry attributed to `operator`. The ledger is append-only, so the failed
+attempts stay visible next to it - the record shows both that the automation could not do it and
+that the call was captured anyway. Run it on the machine that owns the call; it refuses if the
+symbol is not in that day's ledger, and refuses again if the call is already marked.
+
 **Attempts** is what happened today. `silent` means the capture started but no audio was playing
 when it did - counted as a success everywhere else, and the one outcome that looks identical to a
 good recording in every other field.

@@ -22,7 +22,8 @@
     "capture:registration": "node scripts/tests/capture-registration-fixture.js",
     "test:fuzz": "node scripts/tests/test-fuzz.js",
     "shard-preview": "node scripts/shard-preview.js",
-    "dashboard": "node scripts/dashboard.js"
+    "dashboard": "node scripts/dashboard.js",
+    "mark-recorded": "node scripts/mark-recorded.js"
   },
   "dependencies": {
     "playwright-core": "^1.47.2"

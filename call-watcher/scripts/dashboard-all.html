@@ -472,7 +472,7 @@ function render() {
   el('callsCount').textContent = calls.length ? capt + ' captured of ' + calls.length : '';
   el('calls').innerHTML = calls.map((x) => {
     const c = x.c;
-    const manual = c.status === 'started' && c.startedBy === 'extension';
+    const manual = c.status === 'started' && (c.startedBy === 'extension' || c.startedBy === 'operator');
     const silent = c.status === 'started' && c.audioAudible === false && !manual;
     const st = manual ? ['hand', 'by hand'] : silent ? ['warn', 'no audio yet'] : c.status === 'started' ? ['ok', 'captured'] : ['bad', 'failed'];
     const det = c.status === 'started' ? (c.pageTitle || c.resolvedUrl || '') : (c.error || '');
