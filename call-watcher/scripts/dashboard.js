@@ -7,6 +7,7 @@ const { readShard, describeShard } = require('../src/shard');
 
 const DATA_DIR = process.env.DASHBOARD_DATA || path.join(__dirname, '..', 'data');
 const PAGE_PATH = path.join(__dirname, 'dashboard.html');
+const GLOBAL_PAGE_PATH = path.join(__dirname, 'dashboard-all.html');
 const LOG_TAIL_BYTES = 256 * 1024;
 const STALE_HEARTBEAT_MS = 90 * 1000;
 
@@ -217,6 +218,14 @@ const server = http.createServer((req, res) => {
       return send(res, 200, JSON.stringify(tailLog(requestedDay(url), lines)), 'application/json');
     } catch (err) {
       return send(res, 500, JSON.stringify({ error: err.message }), 'application/json');
+    }
+  }
+
+  if (url.pathname === '/all' || url.pathname === '/all.html') {
+    try {
+      return send(res, 200, fs.readFileSync(GLOBAL_PAGE_PATH), 'text/html; charset=utf-8');
+    } catch (err) {
+      return send(res, 500, `dashboard-all.html could not be read: ${err.message}`, 'text/plain');
     }
   }
 

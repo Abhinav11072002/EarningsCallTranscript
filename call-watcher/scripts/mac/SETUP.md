@@ -447,6 +447,27 @@ share to `upcoming.json`.
 `DASHBOARD_PEERS=http://host:8477,http://other:8477` overrides the config for one run, and
 `DASHBOARD_DATA=/path/to/data` points a dashboard at a different data directory.
 
+### The fleet view
+
+With peers configured, `/all` is a single console covering every machine at once:
+
+```
+http://<any-mac-ip>:8477/all
+```
+
+It runs on **both** machines, so either address serves it and there is no primary to lose. Each
+machine fetches its own state and its peers', then merges: one card per machine with its shard
+line and heartbeat age, the next calls due across the fleet counting down, today's attempts from
+both, the whole forward book with the owning machine on every row, and both logs interleaved by
+timestamp and tagged by machine.
+
+An unreachable peer is drawn as a red card rather than dropped, and the header badge counts
+machines that are stale or unreachable - a watcher that has stopped is the thing this view exists
+to make obvious.
+
+The per-machine page grows an **all machines** button once peers are set, so `/` and `/all` reach
+each other.
+
 ### Before you expose it
 
 There is **no authentication**. Anyone who can reach the port can read it. On a trusted office

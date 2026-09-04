@@ -316,6 +316,7 @@
     <button class="btn icon" id="dayNext" title="next day">&rsaquo;</button>
     <button class="btn" id="dayToday">today</button>
   </span>
+  <a class="btn" id="allLink" href="/all" style="text-decoration:none" hidden>all machines</a>
   <button class="btn" id="theme" title="light / dark / follow the system">theme</button>
   <span class="next" id="next" hidden><span class="lbl">next</span><b id="nextSym"></b><span id="nextIn"></span></span>
   <span class="pill dead" id="alive"><span class="dot"></span>no heartbeat</span>
@@ -683,6 +684,8 @@ async function refresh() {
   el('footRefresh').textContent = 'refreshed ' + clock(state.now);
   if (el('dayPick').value !== state.day) el('dayPick').value = state.day;
   el('footVersion').textContent = 'v2 · ' + (state.commit || '?') + ' · page ' + (state.pageVersion || '?');
+
+  el('allLink').hidden = !(state.peers && state.peers.length);
 
   if (peerStates.length) {
     renderMachines(state, peerStates);
