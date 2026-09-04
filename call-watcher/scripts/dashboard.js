@@ -129,6 +129,7 @@ function callsForDay(day) {
       resolvedUrl: entry.resolvedUrl || null,
       pageTitle: entry.pageTitle || null,
       audioAudible: entry.audioAudible ?? null,
+      startedBy: entry.startedBy || existing?.startedBy || null,
       durationSec: entry.durationSec ?? null,
       tries: (existing?.tries || 0) + 1,
     };

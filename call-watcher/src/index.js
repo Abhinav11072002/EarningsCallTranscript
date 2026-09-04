@@ -905,15 +905,47 @@ async function main() {
       // tab registered under the same key.
       if (dispatchedThisPoll.has(key)) continue;
       const record = store.get(key);
-      if (record) {
-        if (record.status === 'completed') continue; // terminal: this call already ran and ended
-        if (streams === null) continue; // cannot verify; try again next poll rather than guess
-        if (streamMatchesRow(streams, row)) {
+      if (record && record.status === 'completed') continue; // terminal: this call already ran and ended
+
+      // Checked BEFORE anything about our own record, because the extension recording this call
+      // is the truth regardless of what we tried. Two things were wrong while this lived inside
+      // `if (record)`.
+      //
+      // A call the watcher never attempted was not checked at all, so a capture started by hand
+      // was invisible here and the watcher dispatched on top of it - two tabs recording one call.
+      //
+      // And a call we FAILED stayed failed in the ledger even after someone started it manually
+      // and the extension was plainly streaming it. markStarted fixed the store, but the ledger
+      // is what the dashboard, analyze and the reconciliation all read, so every report kept
+      // calling a live recording a miss. LND 2027Q1 is the case.
+      if (streams !== null && streamMatchesRow(streams, row)) {
+        const alreadyStarted = record && record.status === 'started';
+        if (!alreadyStarted) {
+          if (!record) store.claim(key);
+          store.markStarted(key);
+          logger.info(
+            `${row.symbol} ${row.fiscalPeriod} is being recorded by the extension but was not started by ` +
+              'this watcher - adopting it as captured.'
+          );
+          obs.recordOutcome({
+            status: 'started',
+            symbol: row.symbol,
+            fiscalPeriod: row.fiscalPeriod,
+            earningsDate: row.earningsDate,
+            dialinUrl: row.dialinLink,
+            startedBy: 'extension',
+            attempts: (store.get(key) || {}).attempts ?? null,
+          });
+        } else if (record.absentObservations) {
           // Seeing it again clears any absence tally, so a transient blip cannot accumulate
           // across unrelated polls and eventually be mistaken for the call having ended.
-          if (record.status !== 'started' || record.absentObservations) store.markStarted(key);
-          continue;
+          store.markStarted(key);
         }
+        continue;
+      }
+
+      if (record) {
+        if (streams === null) continue; // cannot verify; try again next poll rather than guess
         if (record.status === 'started') {
           // It was recording and now is not. Three very different causes, and the difference
           // decides whether re-recording is correct:

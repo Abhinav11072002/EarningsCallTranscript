@@ -246,6 +246,7 @@
   .tag.waiting { color: var(--ink2); background: var(--surface2); border-color: var(--line2); }
   .tag.soon { color: var(--info); background: var(--infobg); border-color: var(--info); }
   .tag.nolink { color: var(--muted); background: var(--surface2); border-color: var(--line2); }
+  .tag.manual { color: var(--info); background: var(--infobg); border-color: var(--info); }
 
   table:not(.has-peers) .owner { display: none; }
   td.owner { white-space: nowrap; }
@@ -539,9 +540,10 @@ function renderCalls(state) {
   }
   el('calls').innerHTML = calls
     .map((c) => {
-      const silent = c.status === 'started' && c.audioAudible === false;
-      const tone = silent ? 'silent' : c.status === 'started' ? 'started' : 'failed';
-      const word = silent ? 'silent' : c.status;
+      const manual = c.status === 'started' && c.startedBy === 'extension';
+      const silent = c.status === 'started' && c.audioAudible === false && !manual;
+      const tone = manual ? 'manual' : silent ? 'silent' : c.status === 'started' ? 'started' : 'failed';
+      const word = manual ? 'recorded by hand' : silent ? 'silent' : c.status;
       const detail = c.status === 'started' ? c.pageTitle || c.resolvedUrl || '' : c.error || '';
       const tries = c.attempts == null ? c.tries : c.attempts;
       return (

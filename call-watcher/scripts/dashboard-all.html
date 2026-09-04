@@ -230,6 +230,7 @@
   .pill.bad { color: var(--bad); background: var(--bad-soft); border-color: var(--bad); }
   .pill.warn { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
   .pill.idle { color: var(--ink2); background: var(--sunk); border-color: var(--line2); }
+  .pill.hand { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
 
   .logbar { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; background: var(--sunk); }
   .logbar input[type="text"] {
@@ -471,8 +472,9 @@ function render() {
   el('callsCount').textContent = calls.length ? capt + ' captured of ' + calls.length : '';
   el('calls').innerHTML = calls.map((x) => {
     const c = x.c;
-    const silent = c.status === 'started' && c.audioAudible === false;
-    const st = silent ? ['warn', 'no audio yet'] : c.status === 'started' ? ['ok', 'captured'] : ['bad', 'failed'];
+    const manual = c.status === 'started' && c.startedBy === 'extension';
+    const silent = c.status === 'started' && c.audioAudible === false && !manual;
+    const st = manual ? ['hand', 'by hand'] : silent ? ['warn', 'no audio yet'] : c.status === 'started' ? ['ok', 'captured'] : ['bad', 'failed'];
     const det = c.status === 'started' ? (c.pageTitle || c.resolvedUrl || '') : (c.error || '');
     return '<tr><td class="dim">' + hhmmss(c.lastTs) + '</td><td class="sym">' + esc(c.symbol) + '</td>' +
       '<td class="dim">' + esc(c.fiscalPeriod) + '</td>' +
