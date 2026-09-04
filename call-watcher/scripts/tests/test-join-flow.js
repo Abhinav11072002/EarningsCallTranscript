@@ -30,6 +30,10 @@ const ROUTES = {
   '/app-only': 'app-only-lobby.html',
   '/native-plus-form': 'native-app-plus-form.html',
   '/in-meeting': 'in-meeting.html',
+  '/webinar/register/WN_x': 'zoom-webinar-register.html',
+  '/zoom-join-choice': 'zoom-join-choice.html',
+  '/zoom-media-prompt': 'zoom-media-prompt.html',
+  '/zoom-enter-name': 'zoom-enter-name.html',
 };
 
 function startServer() {
@@ -85,6 +89,42 @@ const nativeWasClicked = (page) => page.evaluate(() => Boolean(window.__nativeCl
     const blockerInMeeting = await describeJoinBlocker(page);
     record('once in the meeting nothing blocks the capture', blockerInMeeting === null, blockerInMeeting || 'clear');
     record('the native-app button was never clicked', !(await nativeWasClicked(page)));
+
+    // 1b. A real Zoom webinar, all four screens, walked through by the operator who does it by
+    //     hand: registration form -> "Join from browser" -> a modal asking for microphone and
+    //     camera -> a second form wanting a display name. Interstitials and forms alternate, so
+    //     one pass of each cannot get past the third screen. GWRE, GROW, PANW and RGS all
+    //     stopped there and were reported as having no player.
+    //
+    //     The two forbidden clicks are asserted separately because either one is worse than
+    //     failing: the app button steals the OS foreground, and granting the microphone puts the
+    //     room's own sound into a call we are only listening to.
+    await page.goto(`${base}/webinar/register/WN_x`);
+    let zoomReg = { pending: false };
+    for (let round = 0; round < 3; round++) {
+      const startedAt = page.url();
+      page = await advanceJoinFlow(page, logger);
+      zoomReg = await fillRegistrationForm(page, identity, logger, (adopted) => { page = adopted; });
+      if (zoomReg.page) page = zoomReg.page;
+      page = await advanceJoinFlow(page, logger);
+      if (page.url() === startedAt) break;
+    }
+    const zoomInMeeting = page.url().includes('/in-meeting');
+    record('zoom webinar: all four screens are crossed', zoomInMeeting, page.url());
+    record('zoom webinar: the Workplace app was never clicked', !(await nativeWasClicked(page)));
+    record(
+      'zoom webinar: microphone and camera were never granted',
+      !(await page.evaluate(() => Boolean(window.__usedMic)).catch(() => false))
+    );
+
+    // 1c. The media prompt on its own, crossed by advanceJoinFlow alone. It is a modal with TWO
+    //     controls, so the single-control overlay rule cannot see it, and neither phrasing is a
+    //     browser-entry wording - without a rule of its own the interstitial walker stops dead
+    //     here even though the form filler would have got past it later.
+    await page.goto(`${base}/zoom-media-prompt`);
+    page = await advanceJoinFlow(page, logger);
+    record('media prompt is crossed by the join walker alone', page.url().includes('/zoom-enter-name'), page.url());
+    record('media prompt: microphone was not granted', !(await page.evaluate(() => Boolean(window.__usedMic)).catch(() => false)));
 
     // 2. No browser option at all. Clicking the app button is worse than failing, so the
     //    correct outcome is: touch nothing, and let the guard refuse.

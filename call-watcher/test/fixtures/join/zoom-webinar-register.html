@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><title>Standard Life plc half year results 2026 - Zoom</title></head><body>
+  <h1>Standard Life plc half year results 2026</h1>
+  <p>Date &amp; Time Sep 7, 2026 04:30 in <a href="#tz">America/Toronto</a></p>
+  <p>Description Online event via Zoom</p>
+  <h2>Webinar Registration</h2>
+  <form id="reg">
+    <label>First Name *<input name="first_name" data-expect="firstName"></label>
+    <label>Last Name *<input name="last_name" data-expect="lastName"></label>
+    <label>Email Address *<input type="email" name="email" data-expect="email"></label>
+    <label>Job Title *<input name="job_title" data-expect="jobTitle"></label>
+    <label>Company Name *<input name="org" data-expect="company"></label>
+    <button type="submit">Register</button>
+  </form>
+  <script>
+    reg.onsubmit = (e) => {
+      e.preventDefault();
+      const missing = [...reg.querySelectorAll('input')].filter((i) => !i.value.trim());
+      if (missing.length) { document.title = 'This field is required'; return; }
+      location.href = '/zoom-join-choice';
+    };
+  </script>
+</body></html>

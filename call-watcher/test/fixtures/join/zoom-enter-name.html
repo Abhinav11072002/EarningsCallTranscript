@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><title>Zoom</title></head><body>
+  <div id="stage" style="width:700px;height:400px;background:#222"></div>
+  <h2>Enter Meeting Info</h2>
+  <form id="nameform">
+    <label>Your Name<input id="uname" data-expect="fullName"></label>
+    <label><input type="checkbox" id="remember"> Remember my name for future meetings</label>
+    <button type="submit">Join</button>
+  </form>
+  <script>
+    nameform.onsubmit = (e) => { e.preventDefault(); if (uname.value.trim()) location.href = '/in-meeting'; };
+  </script>
+</body></html>

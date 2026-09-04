@@ -31,6 +31,21 @@
 const NATIVE_APP_PATTERN =
   /workplace app|(?:open|launch|join|continue)\s+(?:in|from|with|the)?\s*(?:the\s+)?(?:desktop|native|zoom|teams|webex)?\s*app\b|launch meeting|download (?:now|the app|zoom)|install|get the app|open zoom/i;
 
+// Zoom's web client asks, after "Join from browser", whether it may use the microphone and
+// camera. It is a modal with TWO controls, so the single-control overlay rule does not see it,
+// and neither phrasing is a browser-entry wording - so the join stopped dead on that screen and
+// the call was reported as having no player. GWRE, GROW, PANW and RGS all ended there.
+//
+// Declining is the only correct answer. Capture takes the TAB's audio, not the machine's, so the
+// microphone contributes nothing; granting it would put the room's own sound into a call we are
+// only listening to.
+const MEDIA_DECLINE_PATTERN =
+  /continue without (?:the )?(?:microphone|mic|camera|audio|video)|without (?:microphone|mic) and (?:camera|video)|join without (?:audio|video|microphone|camera)/i;
+
+// Never clicked, on any path. Kept separate from the decline wording because the two sit side by
+// side in the same modal and the grant is the visually primary one.
+const MEDIA_GRANT_PATTERN = /\buse (?:my |the )?(?:microphone|mic|camera|audio|video)\b/i;
+
 // The browser-based way in. Ordered loosely by how explicit each phrasing is.
 // The determiner set matters more than it looks: Microsoft Teams words this "Continue on THIS
 // browser", and an earlier version listing only "the|your" missed it entirely - which is the
@@ -181,6 +196,7 @@ async function findOverlayEntryAction(page) {
 
     // The shape found WHERE to look. The wording still decides whether it is safe to touch.
     if (NATIVE_APP_PATTERN.test(candidate.text)) continue;
+    if (MEDIA_GRANT_PATTERN.test(candidate.text)) continue;
     if (OVERLAY_REFUSE_PATTERN.test(candidate.text)) continue;
 
     const handle = await frame
@@ -244,6 +260,15 @@ async function visibleClickables(page) {
 }
 
 // The single browser-entry action available on this page, or null if there is none.
+async function findMediaDeclineAction(page) {
+  for (const { el, text } of await visibleClickables(page)) {
+    if (MEDIA_GRANT_PATTERN.test(text)) continue;
+    if (!MEDIA_DECLINE_PATTERN.test(text)) continue;
+    return { kind: 'click', el, text, why: 'declining microphone and camera' };
+  }
+  return null;
+}
+
 async function findBrowserEntryAction(page) {
   for (const { el, text } of await visibleClickables(page)) {
     if (!BROWSER_ENTRY_PATTERN.test(text)) continue;
@@ -304,6 +329,7 @@ async function advanceJoinFlow(page, logger) {
     // The structural rule is the fallback, for the gates whose copy we have never met.
     const action =
       (await findBrowserEntryAction(page).catch(() => null)) ||
+      (await findMediaDeclineAction(page).catch(() => null)) ||
       (await findOverlayEntryAction(page).catch(() => null));
     if (!action) return page;
 
@@ -371,4 +397,6 @@ module.exports = {
   NATIVE_APP_PATTERN,
   BROWSER_ENTRY_PATTERN,
   PRE_JOIN_TEXT_PATTERN,
+  MEDIA_DECLINE_PATTERN,
+  MEDIA_GRANT_PATTERN,
 };

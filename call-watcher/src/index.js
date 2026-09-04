@@ -55,6 +55,9 @@ const DATA_DIR = path.join(__dirname, '..', 'data');
 const EXIT_REFUSED_TO_START = 78;
 const LOG_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const RECONNECT_DELAY_MS = 10000;
+// How many times to alternate interstitial-then-form. Three covers the deepest flow seen (a
+// Zoom webinar: register, browser choice, media prompt, name form) with one spare.
+const JOIN_ROUNDS = 3;
 const RETRY_BASE_DELAY_MS = 30000;
 const RETRY_MAX_DELAY_MS = 10 * 60 * 1000;
 // Two separate ceilings, both deliberately much tighter than the single 5-minute one they
@@ -207,29 +210,38 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
           period,
           strategy,
         });
-        // Some providers gate the call on a choice of client rather than a form (Zoom's lobby
-        // offers only "Join from Zoom Workplace app" and "Join from browser"). That has to be
-        // resolved BEFORE the form filler runs, because the form we need - Zoom's "Your Name" -
-        // only exists on the far side of it.
-        // Reassigned, not just awaited: an entry link with target=_blank opens the call in its
-        // own tab, and capture is per-tab - continuing with the old handle would record the lobby.
-        page = await advanceJoinFlow(page, logger);
-        // The callback keeps `page` current even if the form filler throws mid-way: it can
-        // follow the call into a new tab and close the old one, and the catch below must clean
-        // up the tab we actually hold, not the one we started with.
-        const registration = await fillRegistrationForm(
-          page,
-          config.dummyIdentity,
-          logger,
-          (adopted) => {
-            page = adopted;
-          },
-          strategy
-        );
-        if (registration.page) page = registration.page;
-        // ...and again afterwards: a registration step can hand back a second client choice, and
-        // Zoom's web client re-renders into the meeting only once the name form is submitted.
-        page = await advanceJoinFlow(page, logger);
+        // Interstitials and forms ALTERNATE, so this alternates too, for as long as it is
+        // getting somewhere. One pass of each is not enough for a real Zoom webinar, which is
+        // four screens deep: a registration form, then "Join from browser", then a modal asking
+        // for microphone and camera, then a second form wanting a display name. A single
+        // join/form/join could only ever reach the third of those, which is where GWRE, GROW,
+        // PANW and RGS all stopped and were reported as having no player.
+        //
+        // Progress is the URL changing. A round that ends where it began has nothing left to
+        // click or fill, so continuing would only re-click the same things - the loop stops
+        // rather than spending the attempt on repeats.
+        //
+        // advanceJoinFlow is reassigned, not just awaited: an entry link with target=_blank
+        // opens the call in its own tab, and capture is per-tab, so continuing with the old
+        // handle would record the lobby. The form filler's callback does the same job for a
+        // popup it adopts mid-fill.
+        let registration = { pending: false, page: null, error: null };
+        for (let round = 0; round < JOIN_ROUNDS; round++) {
+          const roundStartedAt = page.url();
+          page = await advanceJoinFlow(page, logger);
+          registration = await fillRegistrationForm(
+            page,
+            config.dummyIdentity,
+            logger,
+            (adopted) => {
+              page = adopted;
+            },
+            strategy
+          );
+          if (registration.page) page = registration.page;
+          page = await advanceJoinFlow(page, logger);
+          if (page.url() === roundStartedAt) break;
+        }
         // Press play if the player is waiting to be started. Joining a call and hearing it are
         // not the same thing, and a silent tab is stopped by the extension after ten minutes -
         // which the poll loop then reads as the stream having died, and reacquires, and starts
