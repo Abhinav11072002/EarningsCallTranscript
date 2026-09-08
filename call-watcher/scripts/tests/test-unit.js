@@ -17,7 +17,7 @@ const { StateStore } = require('../../src/stateStore');
 const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor, withinActionableWindow } = require('../../src/dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('../../src/providerRules');
 const { shardIndexFor, ownsRow, readShard, describeShard } = require('../../src/shard');
-const { isProviderNonContentPath, isFurniturePath } = require('../../src/webcastResolver');
+const { isProviderNonContentPath, isFurniturePath, isSocialHost } = require('../../src/webcastResolver');
 const dashboard = require('../dashboard.js');
 const { mapWithConcurrency, Mutex, withDeadline, runPreparedBatch } = require('../../src/concurrency');
 const { resolveLogPath, pruneOldLogFiles } = require('../../src/logRotation');
@@ -2107,6 +2107,61 @@ check('dashboard: a missing log file reports itself rather than throwing', () =>
   const result = dashboard.tailLog('2999-01-01', 50);
   assert.strictEqual(result.missing, true);
   assert.deepStrictEqual(result.lines, []);
+});
+
+// -------------------------------------------- promises that must not float
+check('every waitForEvent is either awaited or made unable to reject', () => {
+  // 2026-09-07 cost three calls to one unguarded one. dialinLinkClickResolver created a page-event
+  // promise, then clicked, then awaited it - and a throw from the click in between left the
+  // promise with nobody listening. Ten seconds later it rejected on its own, reached
+  // process.on('unhandledRejection'), and exited the watcher. The supervisor restarted it and the
+  // next attempt did the same, four times a row, until the attempt counter stopped it.
+  //
+  // The race itself resists a test: Playwright re-resolves a detached handle rather than throwing
+  // on demand, so the timing cannot be forced. The SHAPE can be checked, and it generalises - this
+  // catches the same mistake anywhere in src/, which a test of that one function would not.
+  const dir = path.join(__dirname, '..', '..', 'src');
+  const offenders = [];
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
+    const text = fs.readFileSync(path.join(dir, file), 'utf8');
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      if (!/waitForEvent\(/.test(line)) return;
+      // Safe two ways: awaited on the spot, so a throw cannot get between creation and await; or
+      // given a catch, so the promise resolves instead of rejecting however long it floats.
+      const window = lines.slice(i, i + 4).join(' ');
+      if (/await\s+[\w.]*waitForEvent\(/.test(line)) return;
+      if (/\.catch\(/.test(window)) return;
+      offenders.push(`${file}:${i + 1}  ${line.trim()}`);
+    });
+  }
+  assert.deepStrictEqual(offenders, [], 'a waitForEvent promise that can reject unobserved');
+});
+
+check('resolver: a social network is never a call, on any link path', () => {
+  // FSJ.L 2026Q2, 2026-09-08. Three attempts fought a registration form on
+  // investormeetcompany.com; the fourth resolved to www.facebook.com. From attempt three the
+  // link scan accepts any host whose PATH merely looks webcast-shaped, and facebook.com/events/
+  // matches /events. A social network is never a call, whatever its path says.
+  const social = [
+    'https://www.facebook.com/InvestorMeetCompany',
+    'https://facebook.com/events/123',
+    'https://www.fb.me/x',
+    'https://twitter.com/intent/tweet',
+    'https://x.com/someco',
+    'https://www.linkedin.com/sharing/share-offsite/?url=x',
+    'https://www.instagram.com/x',
+    'https://t.me/channel',
+  ];
+  const providers = [
+    'https://edge.media-server.com/mmc/p/x/',
+    'https://events.q4inc.com/attendee/1',
+    'https://www.youtube.com/live/abc',
+    'https://notfacebook.com/x',
+    'https://x.company.com/webcast',
+  ];
+  for (const url of social) assert.strictEqual(isSocialHost(url), true, url);
+  for (const url of providers) assert.strictEqual(isSocialHost(url), false, url);
 });
 
 // ------------------------------------------- provider content paths

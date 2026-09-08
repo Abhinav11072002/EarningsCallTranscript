@@ -68,9 +68,20 @@ const NEVER_FOLLOW_PATTERN = /\breplays?\b|\barchived?\b|on-?demand|\bplaybacks?
 const NON_WEBCAST_PATH_PATTERN =
   /\/(privacy|terms|legal|cookie|gdpr|about|about-us|contact|contact-us|careers|jobs|support|help|faq|blog|resources|pricing|products|solutions|company|press|newsroom|sitemap|accessibility|imprint)(?:[-_/]|$|\?|#)/i;   // the terminator allows a hyphen, so "terms-of-use" is caught too
 
+const NEVER_A_WEBCAST_HOST =
+  /(^|\.)(facebook|fb|twitter|x|instagram|linkedin|tiktok|reddit|pinterest|threads|whatsapp|telegram|t)\.(com|me|co)$/i;
+
 const HOST_CONTENT_PATHS = [
   { host: 'youtube.com', content: /^\/(watch|live|embed|v)(?:\/|$|\?)/i },
 ];
+
+function isSocialHost(url) {
+  try {
+    return NEVER_A_WEBCAST_HOST.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
 
 function isProviderNonContentPath(url) {
   try {
@@ -173,6 +184,7 @@ async function findKnownProviderLink(page, config, hints) {
     if (isAssetUrl(absolute)) continue;
     if (isNonWebcastPath(absolute)) continue;
     if (isProviderNonContentPath(absolute)) continue;
+    if (isSocialHost(absolute)) continue;
     const text = ((await a.innerText().catch(() => '')) || '').trim();
     // Refused outright, not merely marked down. A replay is a recording of a call that has
     // already happened, and following one produces a transcript of the wrong event that looks
@@ -231,6 +243,7 @@ async function findNavigationalLink(page, hints) {
     // listed pdf; it was simply never consulted on this path.
     if (isAssetUrl(absolute)) continue;
     if (isNonWebcastPath(absolute)) continue;
+    if (isSocialHost(absolute)) continue;
     if (NEVER_FOLLOW_PATTERN.test(`${text} ${absolute}`)) continue;
 
     return absolute;
@@ -299,6 +312,10 @@ async function tryResolveOnCurrentPage(page, config, logger, hints) {
       }
       if (isFurniturePath(absolute)) {
         logger.info(`Ignoring "${text}" - ${absolute} is site furniture, not a call.`);
+        continue;
+      }
+      if (isSocialHost(absolute)) {
+        logger.info(`Ignoring "${text}" - ${absolute} is a social network, never a call.`);
         continue;
       }
       logger.info(`Found candidate webcast link via text match: "${text}"`);
@@ -375,4 +392,4 @@ async function resolveWebcastPage(context, dialinUrl, config, logger, hints) {
   return page;
 }
 
-module.exports = { resolveWebcastPage, isNonWebcastPath, isProviderNonContentPath, isFurniturePath };
+module.exports = { resolveWebcastPage, isNonWebcastPath, isProviderNonContentPath, isFurniturePath, isSocialHost };

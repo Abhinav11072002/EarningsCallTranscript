@@ -110,17 +110,45 @@ async function resolveDialinLinkByClick(context, portalPage, symbol, logger, exp
     throw new Error(`Could not re-locate the Dialin Link cell for ${symbol} on the live table`);
   }
 
-  const newPagePromise = context.waitForEvent('page', { timeout: 10000 });
-  await element.click();
+  // Settled to a TAGGED RESULT rather than left to reject. This promise is created before the
+  // click and awaited after it, so any throw from the click in between leaves it with nobody
+  // listening - and ten seconds later it rejects on its own, reaches process.on
+  // ('unhandledRejection'), and takes the whole watcher down.
+  //
+  // That is what happened on 2026-09-07: the click threw on a detached element, this promise
+  // floated, the watcher exited, the supervisor restarted it, and the next attempt did the same.
+  // Bounded at four attempts a row by the attempt counter, so it cost exactly the three calls
+  // booked that morning - IQE.L, IQEPF and PNXGF - and nothing after them.
+  //
+  // A promise that cannot reject cannot become an unhandled rejection, whatever the click does.
+  const newPageResult = context
+    .waitForEvent('page', { timeout: 10000 })
+    .then((opened) => ({ opened }))
+    .catch((err) => ({ err }));
+
+  // Captured rather than thrown, so the flow below runs identically whether the click worked or
+  // not. Throwing here would skip the await above and strand the tab the click may still open.
+  const clickError = await element.click().then(() => null, (err) => err);
 
   let newPage;
   try {
-    newPage = await newPagePromise;
+    const settled = await newPageResult;
+    if (settled.err) throw settled.err;
+    newPage = settled.opened;
   } catch (err) {
     // The click landed on something that is not the link - a padding wrapper, or a cell whose
     // handler sits on a child - so nothing opened. Saying which of the two failures this is
     // matters: the caller can tell "the row moved" from "the click missed", and only the second
     // is worth a different click target.
+    //
+    // A click that threw outright is named separately: that is the table having moved under us,
+    // not a click that missed, and it is the case that used to be fatal.
+    if (clickError) {
+      throw new Error(
+        `Could not click ${symbol}'s Dialin Link cell - the table moved under us ` +
+          `(${clickError.message.split('\n')[0]})`
+      );
+    }
     throw new Error(
       `Clicked ${symbol}'s Dialin Link cell but nothing opened within 10s - the click may have ` +
         `landed on a wrapper rather than the link itself (${err.message})`
