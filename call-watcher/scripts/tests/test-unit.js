@@ -27,7 +27,7 @@ const { SeenLog, reconcile, formatReconciliation } = require('../../src/reconcil
 const { blindReason } = require('../../src/supervisorRules');
 const { matchField } = require('../../src/formFiller');
 const { validateConfig } = require('../../src/validateConfig');
-const { judgeRelevance, driftedWithinHost, symbolAppearsAsWord } = require('../../src/pageRelevance');
+const { judgeRelevance, driftedWithinHost, symbolAppearsAsWord, isVideoHost } = require('../../src/pageRelevance');
 const { strategyForAttempt, BASE } = require('../../src/retryStrategy');
 const { parseSendKeys, toAppleScriptModifiers, toAppleScriptArgs, describeShortcut } = require('../../src/shortcutKeys');
 const { macCommand, windowsCommand } = require('../../src/preflight');
@@ -1652,6 +1652,52 @@ const REAL_CAPTURES = [
   { symbol: 'MOV', fp: '2027Q2', title: 'Movado Group, Inc. Corporate Website Homepage', player: false, want: false },
   { symbol: 'SFL', fp: '2026Q2', title: 'Home', player: false, want: false },
 ];
+
+check('a video host needs the company named, or both the period and the year', () => {
+  const onYouTube = (extra) => ({
+    url: 'https://www.youtube.com/watch?v=abc123',
+    hasPlayer: true,
+    symbol: 'CODA',
+    year: '2026',
+    period: 'Q3',
+    ...extra,
+  });
+
+  const yearOnly = judgeRelevance(onYouTube({ title: 'Investor update 2026', text: 'Investor update 2026' }));
+  assert.strictEqual(yearOnly.accepted, false, 'a bare year on YouTube must not be enough');
+
+  const named = judgeRelevance(onYouTube({ title: 'CODA Markets earnings', text: 'CODA Markets earnings' }));
+  assert.strictEqual(named.accepted, true, 'the ticker as a word is enough anywhere');
+
+  const dated = judgeRelevance(onYouTube({ title: 'Q3 2026 Earnings Call', text: 'Q3 2026 Earnings Call' }));
+  assert.strictEqual(dated.accepted, true, 'period AND year together is enough');
+
+  const elsewhere = judgeRelevance({
+    title: 'Investor update 2026',
+    url: 'https://events.q4inc.com/session',
+    text: 'Investor update 2026',
+    hasPlayer: true,
+    symbol: 'CODA',
+    year: '2026',
+    period: 'Q3',
+  });
+  assert.strictEqual(elsewhere.accepted, true, 'the stricter bar applies only to video hosts');
+});
+
+check('isVideoHost recognises the sharing sites and nothing else', () => {
+  for (const u of ['https://youtube.com/watch?v=1', 'https://www.youtube.com/live/x', 'https://youtu.be/x', 'https://vimeo.com/1']) {
+    assert.strictEqual(isVideoHost(u), true, u);
+  }
+  for (const u of ['https://events.q4inc.com/x', 'https://edge.media-server.com/x', 'https://notyoutube.com/x', 'not a url']) {
+    assert.strictEqual(isVideoHost(u), false, u);
+  }
+});
+
+check('youtube is no longer a trusted direct provider, but is still followable', () => {
+  const config = require('../../config.json');
+  assert.ok(!config.knownDirectProviderDomains.includes('youtube.com'), 'youtube must not earn the known-provider bonus');
+  assert.ok(config.videoHostDomains.includes('youtube.com'), 'youtube must still be reachable as a video host');
+});
 
 check('pageRelevance: every one of the 26 real captures is judged correctly', () => {
   const wrong = [];

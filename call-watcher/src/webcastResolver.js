@@ -15,6 +15,7 @@ const MAX_HOPS = 2; // the initial landing page, plus at most one navigational h
 // module constants - so a first attempt behaves exactly as it did before this existed. See
 // retryStrategy.js for why breadth is something to reach for only after precision has failed.
 const { BASE } = require('./retryStrategy');
+const { hasIdentityFields } = require('./formFiller');
 
 function limitsFrom(hints) {
   const s = (hints && hints.strategy) || BASE;
@@ -179,8 +180,9 @@ async function findKnownProviderLink(page, config, hints) {
     // nothing useful - "Click here", an icon, a bare date - while the href says /webcast/ or
     // /event/ outright, and text-only matching can never find those.
     const knownHost = hostnameMatches(absolute, config.knownDirectProviderDomains);
+    const videoHost = hostnameMatches(absolute, config.videoHostDomains);
     const shapeMatches = Boolean(hrefPattern && hrefPattern.test(new URL(absolute).pathname));
-    if (!knownHost && !shapeMatches) continue;
+    if (!knownHost && !videoHost && !shapeMatches) continue;
     if (isAssetUrl(absolute)) continue;
     if (isNonWebcastPath(absolute)) continue;
     if (isProviderNonContentPath(absolute)) continue;
@@ -251,6 +253,17 @@ async function findNavigationalLink(page, hints) {
   return null;
 }
 
+async function leavesFormBehind(page, candidateUrl) {
+  let sameHost = true;
+  try {
+    sameHost = new URL(candidateUrl).hostname === new URL(page.url()).hostname;
+  } catch {
+    return false;
+  }
+  if (sameHost) return false;
+  return hasIdentityFields(page).catch(() => false);
+}
+
 // Tries the known-domain / embedded-iframe / known-link / text-match checks against whatever
 // page is currently loaded. Returns true if one of them found (and where applicable,
 // navigated to) a resolved webcast page.
@@ -269,6 +282,13 @@ async function tryResolveOnCurrentPage(page, config, logger, hints) {
 
   const knownLink = await findKnownProviderLink(page, config, hints).catch(() => null);
   if (knownLink) {
+    if (await leavesFormBehind(page, knownLink)) {
+      logger.info(
+        `Not following ${knownLink}: this page has a registration form, so the call is here. ` +
+          'An off-site link is a guess; a form is evidence.'
+      );
+      return true;
+    }
     logger.info(`Found link to known webcast provider: ${knownLink}`);
     await page.goto(knownLink, { waitUntil: 'domcontentloaded', timeout: 30000 });
     return true;
@@ -392,4 +412,11 @@ async function resolveWebcastPage(context, dialinUrl, config, logger, hints) {
   return page;
 }
 
-module.exports = { resolveWebcastPage, isNonWebcastPath, isProviderNonContentPath, isFurniturePath, isSocialHost };
+module.exports = {
+  resolveWebcastPage,
+  isNonWebcastPath,
+  isProviderNonContentPath,
+  isFurniturePath,
+  isSocialHost,
+  leavesFormBehind,
+};

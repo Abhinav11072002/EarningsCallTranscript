@@ -46,8 +46,12 @@
     "q4inc.com",
     "notified.com",
     "on24.com",
-    "webinar.net",
-    "youtube.com"
+    "webinar.net"
+  ],
+  "videoHostDomains": [
+    "youtube.com",
+    "youtu.be",
+    "vimeo.com"
   ],
   "maxConcurrentPreparations": 3,
   "prepareDeadlineMs": 120000,

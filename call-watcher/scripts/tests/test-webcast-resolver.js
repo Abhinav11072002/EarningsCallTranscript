@@ -43,6 +43,18 @@ function startServer() {
       if (url === '/cta-text') {
         return send(`<h1>Investor Relations</h1><a href="${provider('/player')}">Listen to Webcast</a>`);
       }
+      if (url === '/form-and-offsite-link') {
+        return send(
+          `<h1>Register for the call</h1>` +
+            `<form><label>First name <input name="firstName"></label>` +
+            `<label>Email <input name="email" type="email"></label>` +
+            `<button type="submit">Register</button></form>` +
+            `<a href="${provider('/player')}">Listen to Webcast</a>`
+        );
+      }
+      if (url === '/noform-offsite-link') {
+        return send(`<h1>Results</h1><a href="${provider('/player')}">Listen to Webcast</a>`);
+      }
       if (url === '/domain-link-odd-wording') {
         // Wording the text matcher would never catch; only the domain check saves this.
         return send(`<h1>Results</h1><a href="${provider('/player')}">Q2 FY26 event access</a>`);
@@ -138,6 +150,18 @@ function startServer() {
       start: ir('/cta-text'),
       expect: (u) => u === prov('/player'),
       why: 'follows the text CTA to the player',
+    },
+    {
+      name: 'registration form on the page AND a link to the provider',
+      start: ir('/form-and-offsite-link'),
+      expect: (u) => u === ir('/form-and-offsite-link'),
+      why: 'the form is evidence the call is here; an off-host link is only a guess',
+    },
+    {
+      name: 'no form, same off-host link - still followed',
+      start: ir('/noform-offsite-link'),
+      expect: (u) => u === prov('/player'),
+      why: 'the form rule must not block ordinary resolution',
     },
     {
       name: 'IR page linking to a provider domain with unrecognisable wording',

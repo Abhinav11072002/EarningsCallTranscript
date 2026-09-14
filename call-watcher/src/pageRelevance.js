@@ -102,6 +102,16 @@ function symbolAppearsAsWord(haystack, symbolRoot) {
 
 // `hasPlayer` is supplied by the caller after inspecting the DOM - see playerProbe() below for
 // what counts. Keeping the decision here and the DOM work there is what makes this testable.
+const VIDEO_HOST_PATTERN = /(^|\.)(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|twitch\.tv)$/i;
+
+function isVideoHost(url) {
+  try {
+    return VIDEO_HOST_PATTERN.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function judgeRelevance({
   title = '',
   url = '',
@@ -156,6 +166,15 @@ function judgeRelevance({
   const yearMatch = Boolean(year && haystack.includes(String(year).toLowerCase()));
   const periodMatch = Boolean(period && haystack.includes(String(period).toLowerCase()));
 
+  if (isVideoHost(url) && !strongSymbol && !(yearMatch && periodMatch)) {
+    return {
+      accepted: false,
+      reason:
+        'this is a video-sharing site, where anything can be hosted, and the page does not name ' +
+        'the company or both the period and the year - so there is no evidence it is this call',
+    };
+  }
+
   // With a player confirmed, any of these is enough to believe it is the right call. They are
   // ordered by how much they actually tell us, so the log names the strongest one that applied.
   if (strongSymbol) return { accepted: true, reason: `a player, and the ticker "${symbolRoot}" as a word` };
@@ -206,6 +225,7 @@ function playerProbe() {
 }
 
 module.exports = {
+  isVideoHost,
   judgeRelevance,
   playerProbe,
   driftedWithinHost,

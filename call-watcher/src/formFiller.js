@@ -1566,4 +1566,20 @@ async function inspectFields(page) {
   return rows;
 }
 
-module.exports = { fillRegistrationForm, matchField, inspectFields };
+async function hasIdentityFields(page) {
+  for (const frame of page.frames()) {
+    const fields = await frame.$$('input:visible, select:visible, textarea:visible').catch(() => []);
+    for (const field of fields) {
+      const type = ((await field.getAttribute('type').catch(() => '')) || 'text').toLowerCase();
+      if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'search'].includes(type)) continue;
+      const description = await describeField(field);
+      if (IRRELEVANT_FIELD_PATTERN.test(description)) continue;
+      if (!matchField(description)) continue;
+      if (await isFurniture(field)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+module.exports = { fillRegistrationForm, matchField, inspectFields, hasIdentityFields };
