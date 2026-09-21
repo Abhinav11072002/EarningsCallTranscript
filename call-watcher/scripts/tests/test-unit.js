@@ -1653,6 +1653,53 @@ const REAL_CAPTURES = [
   { symbol: 'SFL', fp: '2026Q2', title: 'Home', player: false, want: false },
 ];
 
+check('a provider that redirects is not mistaken for the wrong row', () => {
+  const { sameHostAsPrefix } = require('../../src/dialinLinkClickResolver');
+
+  assert.strictEqual(
+    sameHostAsPrefix(
+      'https://efghermesevents.webex.com/webappng/sites/efghermesevents/meeting/register/6cdb?ticket=48',
+      'https://efghermesevents.webex.com/weblink/register'
+    ),
+    true,
+    'IDGXF 2026Q2: Webex redirects /weblink/register to /webappng/... and the call was refused'
+  );
+
+  assert.strictEqual(sameHostAsPrefix('https://viavid.webcasts.com/starthere.jsp?ei=1', 'https://viavid.webcasts.co'), true);
+  assert.strictEqual(sameHostAsPrefix('https://event.choruscall.com/mediaframe/webcast.html', 'https://event.choruscall.c'), true);
+
+  assert.strictEqual(
+    sameHostAsPrefix('https://edge.media-server.com/other-call', 'https://events.q4inc.com/expected'),
+    false,
+    'a different provider is still refused'
+  );
+  assert.strictEqual(sameHostAsPrefix('not-a-url', 'https://x.example/y'), false);
+});
+
+check('a link to a sign-in or social host on another site is never clicked', () => {
+  const { isOffsiteAuthOrSocial } = require('../../src/offsiteHosts');
+
+  assert.strictEqual(
+    isOffsiteAuthOrSocial('https://engageinvestor.example/event', 'https://accounts.google.com/signin'),
+    true,
+    'LSL.L, LSLPF and EVPL.L all ended on accounts.google.com'
+  );
+  assert.strictEqual(
+    isOffsiteAuthOrSocial('https://www.investormeetcompany.com/e', 'https://www.facebook.com/share'),
+    true,
+    'FSJ.L, ITX.L and ITXXF all ended on facebook.com'
+  );
+
+  assert.strictEqual(isOffsiteAuthOrSocial('https://events.q4inc.com/a', 'https://events.q4inc.com/b'), false);
+  assert.strictEqual(isOffsiteAuthOrSocial('https://ir.example.com/x', 'https://edge.media-server.com/player'), false);
+  assert.strictEqual(isOffsiteAuthOrSocial('https://ir.example.com/x', '/relative/path'), false);
+  assert.strictEqual(
+    isOffsiteAuthOrSocial('https://accounts.google.com/a', 'https://accounts.google.com/b'),
+    false,
+    'already on that host is not leaving for it'
+  );
+});
+
 check('a video host needs the company named, or both the period and the year', () => {
   const onYouTube = (extra) => ({
     url: 'https://www.youtube.com/watch?v=abc123',

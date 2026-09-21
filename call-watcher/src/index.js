@@ -3,7 +3,7 @@ const path = require('path');
 const { loadConfig } = require('./loadConfig');
 const { StateStore } = require('./stateStore');
 const { extractRows, minutesUntilCall, rowKey, stampDueAt, minutesRemaining } = require('./tableWatcher');
-const { resolveDialinLinkByClick } = require('./dialinLinkClickResolver');
+const { resolveDialinLinkByClick, sameHostAsPrefix } = require('./dialinLinkClickResolver');
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
@@ -166,10 +166,11 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
             // appear several times, and the first occurrence is not necessarily this call.
             resolveDialinLinkByClick(context, portalPage, row.symbol, logger, row.dialinLink)
           );
-          // The click resolver finds the row by symbol text alone, so this guards against it
-          // having matched a different row for the same ticker: the full URL must extend the
-          // prefix the portal actually showed for THIS row.
-          if (truncatedPrefix.length > 12 && !dialinLink.startsWith(truncatedPrefix)) {
+          // A backstop only: the click resolver already picks the row by its truncated text, which
+          // belongs to that row and no other. So this asks the weaker question - same provider? -
+          // because providers redirect. Webex sends /weblink/register to /webappng/.../register
+          // with a ticket, and demanding the literal prefix cost IDGXF 2026Q2 on 2026-09-15.
+          if (truncatedPrefix.length > 12 && !dialinLink.startsWith(truncatedPrefix) && !sameHostAsPrefix(dialinLink, truncatedPrefix)) {
             throw new Error(
               `Click-resolved link does not extend the truncated prefix shown for this row ` +
                 `(expected it to start with "${truncatedPrefix}", got "${dialinLink}") - probably the wrong row`

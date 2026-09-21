@@ -176,4 +176,14 @@ async function resolveDialinLinkByClick(context, portalPage, symbol, logger, exp
   return resolvedUrl;
 }
 
-module.exports = { resolveDialinLinkByClick };
+function sameHostAsPrefix(resolved, prefix) {
+  try {
+    const a = new URL(resolved).hostname;
+    const b = new URL(prefix).hostname;
+    return a === b || a.startsWith(b) || b.startsWith(a);
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { resolveDialinLinkByClick, sameHostAsPrefix };

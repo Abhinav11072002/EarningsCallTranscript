@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><title>Second Quarter 2027 Financial Results Conference Call</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false"></head>
+<body>
+  <h1>The following information is required to view this webcast.</h1>
+  <div id="gate">
+    <label>Email <input name="email" data-expect="email"></label>
+    <label>First Name <input name="firstName" data-expect="firstName"></label>
+    <label>Last Name <input name="lastName" data-expect="lastName"></label>
+    <label>Company <input name="company" data-expect="company"></label>
+    <button id="submit" type="button">Submit</button>
+    <p>Or <a href="https://accounts.google.com/signin" data-forbidden="true"
+            onclick="window.__wentToGoogle=1;return false">Register with Google</a></p>
+  </div>
+  <div id="inmeeting" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+  <script>
+    document.getElementById('submit').addEventListener('click', function () {
+      document.getElementById('gate').hidden = true;
+      document.getElementById('inmeeting').hidden = false;
+    });
+  </script>
+</body></html>

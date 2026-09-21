@@ -69,20 +69,11 @@ const NEVER_FOLLOW_PATTERN = /\breplays?\b|\barchived?\b|on-?demand|\bplaybacks?
 const NON_WEBCAST_PATH_PATTERN =
   /\/(privacy|terms|legal|cookie|gdpr|about|about-us|contact|contact-us|careers|jobs|support|help|faq|blog|resources|pricing|products|solutions|company|press|newsroom|sitemap|accessibility|imprint)(?:[-_/]|$|\?|#)/i;   // the terminator allows a hyphen, so "terms-of-use" is caught too
 
-const NEVER_A_WEBCAST_HOST =
-  /(^|\.)(facebook|fb|twitter|x|instagram|linkedin|tiktok|reddit|pinterest|threads|whatsapp|telegram|t)\.(com|me|co)$/i;
+const { isSocialHost } = require('./offsiteHosts');
 
 const HOST_CONTENT_PATHS = [
   { host: 'youtube.com', content: /^\/(watch|live|embed|v)(?:\/|$|\?)/i },
 ];
-
-function isSocialHost(url) {
-  try {
-    return NEVER_A_WEBCAST_HOST.test(new URL(url).hostname);
-  } catch {
-    return false;
-  }
-}
 
 function isProviderNonContentPath(url) {
   try {
