@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><title>Craneware plc presents its FY26 Results</title>
+<meta name="expect-joined" content="true"><meta name="expect-refused" content="false">
+<style>
+  .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10}
+  .modal{position:fixed;top:30%;left:25%;width:50%;background:#fff;padding:24px;z-index:11}
+</style></head>
+<body>
+  <h1>Craneware plc presents its FY26 Results</h1>
+  <p>22 Sep 2026, 15:30 UK time</p>
+  <div id="hero">
+    <button id="reg" type="button">Register now</button>
+    <button type="button">Save event</button>
+    <button type="button">Need Help?</button>
+  </div>
+
+  <div id="backdrop" class="backdrop" hidden></div>
+  <div id="modal" class="modal" hidden>
+    <h2>How are you attending?</h2>
+    <button id="investor" type="button">I am an individual investor</button>
+    <button id="signin" type="button" data-forbidden="true" onclick="window.__wentToSignIn=1">Sign in</button>
+  </div>
+
+  <div id="inmeeting" hidden data-incall="true"><h2>Live</h2><audio controls></audio></div>
+
+  <script>
+    document.getElementById('reg').addEventListener('click', function () {
+      document.getElementById('backdrop').hidden = false;
+      document.getElementById('modal').hidden = false;
+    });
+    document.getElementById('investor').addEventListener('click', function () {
+      document.getElementById('backdrop').hidden = true;
+      document.getElementById('modal').hidden = true;
+      document.getElementById('hero').hidden = true;
+      document.getElementById('inmeeting').hidden = false;
+    });
+  </script>
+</body></html>

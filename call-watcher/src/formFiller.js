@@ -260,6 +260,15 @@ function matchField(description) {
 // still appears active" and fail a call that was completely fine - and the newsletter box got
 // the dummy email typed into it. Clicking a header "Sign In" is worse still: it navigates away
 // from the player entirely.
+
+// The way in that needs no account. Scored above everything else because where a page offers
+// both, this one can actually be completed and the sign-in cannot - there are no credentials
+// anywhere in this system. CRW.L 2026Q4 is the case: SparkLive's modal offers "I am an
+// individual investor" beside "Sign in", the investor choice matched nothing and scored 0, and
+// "Sign in" won on ENTRY_BUTTON_PATTERN alone - straight into a login wall, three times over.
+const GUEST_PATH_PATTERN =
+  /continue\s+without|guest|(?:individual|private|retail|institutional)\s+investor|attend\s+as/i;
+
 const FURNITURE_SELECTOR = 'nav, header, footer, [role=navigation], [role=search], [role=banner], [role=contentinfo]';
 
 // Inputs that look identity-ish but never belong to a gate. Excluded everywhere, regardless of
@@ -302,6 +311,33 @@ const UNFILLABLE_GATE_PATTERN =
 function isFurniture(handle) {
   return handle
     .evaluate((node, selector) => Boolean(node.closest(selector)), FURNITURE_SELECTOR)
+    .catch(() => false);
+}
+
+// A button the step before it opened a modal over. It is still in the DOM, still visible and
+// still scores, so it is enumerated again and clicked - and Playwright then spends the whole
+// click timeout reporting that a backdrop intercepts pointer events. CRW.L lost five seconds an
+// attempt to exactly that, re-clicking "Register now" through Angular's cdk-overlay-backdrop.
+//
+// Deliberately answers "no" for anything outside the viewport rather than "covered": a control
+// below the fold has no hit-test point, and treating that as covered would throw away every
+// button a page puts at the bottom. Playwright scrolls to those itself.
+//
+// Answers "no" inside a shadow root for the same reason: document.elementFromPoint returns the
+// shadow HOST, never the control, so every shadow-DOM button reads as covered by something it
+// is actually inside. That took out the shadow-dom-form fixture the first time this was written.
+async function isCoveredByOverlay(handle) {
+  return handle
+    .evaluate((el) => {
+      if (el.getRootNode() !== document) return false;
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+      const top = document.elementFromPoint(x, y);
+      if (!top) return false;
+      return !(el === top || el.contains(top) || top.contains(el));
+    })
     .catch(() => false);
 }
 
@@ -1231,7 +1267,9 @@ async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback
     if (STALE_BUTTON_PATTERN.test(text)) continue;
     if (MODE_SWITCH_PATTERN.test(text)) continue;
     if (await isFurniture(btn)) continue;
-    const entryWorded = REGISTRATION_BUTTON_PATTERN.test(text) || ENTRY_BUTTON_PATTERN.test(text);
+    if (await isCoveredByOverlay(btn)) continue;
+    const entryWorded =
+      REGISTRATION_BUTTON_PATTERN.test(text) || ENTRY_BUTTON_PATTERN.test(text) || GUEST_PATH_PATTERN.test(text);
     // entryWorded has to earn a score of its own, or it is discarded two lines below by
     // `if (!score)` before anything can act on it - which is what happened to every CTA whose
     // wording ENTRY_BUTTON_PATTERN recognises but this narrower list does not.
@@ -1246,7 +1284,7 @@ async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback
     //
     // 3 puts it below an explicit Register or a submit-worded CTA, which are better bets when a
     // page offers both, and above a bare unlabelled submit button, which is a guess.
-    const score = /continue\s+without|guest/i.test(text)
+    const score = GUEST_PATH_PATTERN.test(text)
       ? 6
       : /register|registration/i.test(text)
         ? 5
