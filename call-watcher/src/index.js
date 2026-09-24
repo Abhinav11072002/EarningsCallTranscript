@@ -7,13 +7,7 @@ const { resolveDialinLinkByClick, sameHostAsPrefix } = require('./dialinLinkClic
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
-const {
-  shouldSkipAsLate,
-  shouldReacquireNow,
-  retryDelayMsFor,
-  withinActionableWindow,
-  shouldFailOnPendingGate,
-} = require('./dispatchRules');
+const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor, withinActionableWindow } = require('./dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('./providerRules');
 const { ownsRow, readShard, describeShard } = require('./shard');
 const { strategyForAttempt } = require('./retryStrategy');
@@ -268,15 +262,9 @@ async function prepareCall(context, portalPage, row, key, logger, attempt = 1) {
         // into an entirely different tab - after the earlier reading was taken. Recording the
         // pre-form URL made the ledger describe a page that was never captured.
         resolvedUrl = page.url();
-        if (shouldFailOnPendingGate({ pending: registration.pending, playing: playback && playback.playing })) {
+        if (registration.pending) {
           const detail = registration.error ? `: ${registration.error}` : '';
           throw new Error(`Registration gate still appears active after filling and submission attempts${detail}`);
-        }
-        if (registration.pending) {
-          logger.warn(
-            `A registration form is still on ${row.symbol}'s page, but the player is running (${playback.action}) - ` +
-              'recording anyway. Some providers leave a returning-user login box up beside the player.'
-          );
         }
         return { page, dialinLink, resolvedUrl, playback };
       })(),

@@ -1653,30 +1653,6 @@ const REAL_CAPTURES = [
   { symbol: 'SFL', fp: '2026Q2', title: 'Home', player: false, want: false },
 ];
 
-check('a running player outranks a form the provider left on the page', () => {
-  const { shouldFailOnPendingGate } = require('../../src/dispatchRules');
-
-  assert.strictEqual(
-    shouldFailOnPendingGate({ pending: true, playing: true }),
-    false,
-    'webcast.openbriefing.com: registration works, the player appears, and its returning-user ' +
-      'login box stays on the page - ten calls were registered and then thrown away'
-  );
-
-  assert.strictEqual(
-    shouldFailOnPendingGate({ pending: true, playing: false }),
-    true,
-    'a gate with nothing playing is still a failure'
-  );
-  assert.strictEqual(shouldFailOnPendingGate({ pending: false, playing: false }), false);
-  assert.strictEqual(shouldFailOnPendingGate({ pending: false, playing: true }), false);
-  assert.strictEqual(
-    shouldFailOnPendingGate({ pending: true, playing: undefined }),
-    true,
-    'unknown playback is not permission to record'
-  );
-});
-
 check('a provider that redirects is not mistaken for the wrong row', () => {
   const { sameHostAsPrefix } = require('../../src/dialinLinkClickResolver');
 

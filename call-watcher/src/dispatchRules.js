@@ -140,28 +140,4 @@ function retryDelayMsFor({
   return Math.min(Math.max(exponential, spread), maxDelayMs, latestUseful);
 }
 
-// A form still on the page is an INFERENCE that we are locked out. A player that is running is
-// DIRECT evidence that we are not. Where the two disagree, the player wins.
-//
-// webcast.openbriefing.com is why. Its page carries a registration form and, separately, a
-// returning-user login box holding one email field. Registering works and the player appears
-// immediately - and the login box stays on the page, so hasPendingRegistration still finds an
-// identity field and reports a gate. Ten calls across five events were registered successfully
-// and then thrown away, every one reporting "gate still appears active" with no provider error
-// after the colon, because nothing was actually wrong.
-//
-// Deliberately requires the player to be RUNNING rather than merely present: a teaser or a
-// preview clip sitting behind a real registration wall is exactly the page this would otherwise
-// wave through, and those do exist.
-function shouldFailOnPendingGate({ pending, playing }) {
-  if (!pending) return false;
-  return !playing;
-}
-
-module.exports = {
-  shouldSkipAsLate,
-  shouldReacquireNow,
-  retryDelayMsFor,
-  withinActionableWindow,
-  shouldFailOnPendingGate,
-};
+module.exports = { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor, withinActionableWindow };
