@@ -238,6 +238,52 @@ function zoomWebClientUrl(rawUrl) {
   return target.toString();
 }
 
+// Zoom's registration confirmation is not the call. CARD.L 2027Q2 registered, was approved
+// between attempts (the URL went ac=pending -> ac=approved), and still failed with "no player",
+// because the page it lands on is /rest/webinar/registrant/<id>/info - a confirmation carrying
+// the join link, with nothing to play on it.
+//
+// Matched on the HREF SHAPE rather than the button's wording: Zoom's copy varies by account and
+// locale, but the join target is always /j/<id> or /w/<id> on a zoom.us host. Navigated to
+// unchanged - the registrant token in ?tk= is what authorises this registration, and rewriting
+// the URL through zoomWebClientUrl would drop it.
+const ZOOM_REGISTRANT_PAGE = /\/rest\/webinar\/registrant\/|\/webinar\/register\//i;
+const ZOOM_JOIN_HREF = /^https?:\/\/[^/]*zoom\.us\/(?:j|w)\/\d{6,}/i;
+
+function isZoomRegistrantPage(currentUrl) {
+  let host;
+  try {
+    host = new URL(currentUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host !== 'zoom.us' && !host.endsWith('.zoom.us')) return false;
+  return ZOOM_REGISTRANT_PAGE.test(currentUrl);
+}
+
+async function findZoomRegistrantJoinAction(page) {
+  const current = page.url();
+  if (!isZoomRegistrantPage(current)) return null;
+
+  const href = await page
+    .evaluate((pattern) => {
+      const re = new RegExp(pattern, 'i');
+      for (const a of document.querySelectorAll('a[href]')) {
+        if (re.test(a.href || '')) return a.href;
+      }
+      return null;
+    }, ZOOM_JOIN_HREF.source)
+    .catch(() => null);
+  if (!href || href === current) return null;
+
+  return {
+    kind: 'navigate',
+    url: href,
+    text: 'the registered join link',
+    why: 'a Zoom registration confirmation carries the join link, not the call',
+  };
+}
+
 async function visibleClickables(page) {
   const out = [];
   for (const frame of page.frames()) {
@@ -328,6 +374,7 @@ async function advanceJoinFlow(page, logger) {
     // Wording first: an explicit "Join from your browser" is a stronger signal than any shape.
     // The structural rule is the fallback, for the gates whose copy we have never met.
     const action =
+      (await findZoomRegistrantJoinAction(page).catch(() => null)) ||
       (await findBrowserEntryAction(page).catch(() => null)) ||
       (await findMediaDeclineAction(page).catch(() => null)) ||
       (await findOverlayEntryAction(page).catch(() => null));
@@ -387,6 +434,8 @@ async function advanceJoinFlow(page, logger) {
 
 module.exports = {
   findOverlayEntryAction,
+  isZoomRegistrantPage,
+  ZOOM_JOIN_HREF,
   OVERLAY_REFUSE_PATTERN,
   advanceJoinFlow,
   describeJoinBlocker,

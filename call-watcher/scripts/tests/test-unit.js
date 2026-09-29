@@ -1677,27 +1677,77 @@ check('a provider that redirects is not mistaken for the wrong row', () => {
 });
 
 check('a link to a sign-in or social host on another site is never clicked', () => {
-  const { isOffsiteAuthOrSocial } = require('../../src/offsiteHosts');
+  const { isOffsiteDeadEnd } = require('../../src/offsiteHosts');
 
   assert.strictEqual(
-    isOffsiteAuthOrSocial('https://engageinvestor.example/event', 'https://accounts.google.com/signin'),
+    isOffsiteDeadEnd('https://engageinvestor.example/event', 'https://accounts.google.com/signin'),
     true,
     'LSL.L, LSLPF and EVPL.L all ended on accounts.google.com'
   );
   assert.strictEqual(
-    isOffsiteAuthOrSocial('https://www.investormeetcompany.com/e', 'https://www.facebook.com/share'),
+    isOffsiteDeadEnd('https://www.investormeetcompany.com/e', 'https://www.facebook.com/share'),
     true,
     'FSJ.L, ITX.L and ITXXF all ended on facebook.com'
   );
 
-  assert.strictEqual(isOffsiteAuthOrSocial('https://events.q4inc.com/a', 'https://events.q4inc.com/b'), false);
-  assert.strictEqual(isOffsiteAuthOrSocial('https://ir.example.com/x', 'https://edge.media-server.com/player'), false);
-  assert.strictEqual(isOffsiteAuthOrSocial('https://ir.example.com/x', '/relative/path'), false);
+  assert.strictEqual(isOffsiteDeadEnd('https://events.q4inc.com/a', 'https://events.q4inc.com/b'), false);
+  assert.strictEqual(isOffsiteDeadEnd('https://ir.example.com/x', 'https://edge.media-server.com/player'), false);
+  assert.strictEqual(isOffsiteDeadEnd('https://ir.example.com/x', '/relative/path'), false);
   assert.strictEqual(
-    isOffsiteAuthOrSocial('https://accounts.google.com/a', 'https://accounts.google.com/b'),
+    isOffsiteDeadEnd('https://accounts.google.com/a', 'https://accounts.google.com/b'),
     false,
     'already on that host is not leaving for it'
   );
+});
+
+check('a Zoom registration confirmation is followed to its join link', () => {
+  const { isZoomRegistrantPage, ZOOM_JOIN_HREF } = require('../../src/joinFlow');
+
+  assert.strictEqual(
+    isZoomRegistrantPage('https://us02web.zoom.us/rest/webinar/registrant/1234/info?tk=abc'),
+    true,
+    'CARD.L 2027Q2 landed here, registered and approved, and reported no player'
+  );
+  assert.strictEqual(isZoomRegistrantPage('https://zoom.us/webinar/register/WN_x?ac=approved'), true);
+  assert.strictEqual(isZoomRegistrantPage('https://us02web.zoom.us/wc/83171321596/join'), false);
+  assert.strictEqual(isZoomRegistrantPage('https://notzoom.us/webinar/register/WN_x'), false);
+  assert.strictEqual(isZoomRegistrantPage('not-a-url'), false);
+
+  assert.ok(ZOOM_JOIN_HREF.test('https://us02web.zoom.us/w/83171321596?tk=abc'));
+  assert.ok(ZOOM_JOIN_HREF.test('https://zoom.us/j/83171321596'));
+  assert.ok(!ZOOM_JOIN_HREF.test('https://support.zoom.com/hc/en/article'));
+  assert.ok(!ZOOM_JOIN_HREF.test('https://us02web.zoom.us/rest/webinar/registrant/1234/info'));
+});
+
+check('a vendor help or status subdomain is a dead end, not the call', () => {
+  const { isOffsiteDeadEnd } = require('../../src/offsiteHosts');
+
+  assert.strictEqual(
+    isOffsiteDeadEnd('https://zoom.us/j/123456', 'https://support.zoom.com/hc/en/article'),
+    true,
+    'CARD.L walked off the call into the Zoom help centre'
+  );
+  assert.strictEqual(isOffsiteDeadEnd('https://ir.example.com/x', 'https://status.vendor.com/'), true);
+  assert.strictEqual(isOffsiteDeadEnd('https://ir.example.com/x', 'https://docs.vendor.com/'), true);
+  assert.strictEqual(
+    isOffsiteDeadEnd('https://ir.example.com/x', 'https://supportive.example.com/webcast'),
+    false,
+    'the prefix has to be the whole label'
+  );
+});
+
+check('the last keystroke is not thrown away over a few seconds', () => {
+  const { shouldTriggerDespiteStart } = require('../../src/dispatchRules');
+
+  assert.strictEqual(shouldTriggerDespiteStart({ minsPastStart: 0.1, graceMinutes: 2 }), true,
+    'CRFCF 2027Q2 crossed its start time by 0.1 min waiting behind CARD.L');
+  assert.strictEqual(shouldTriggerDespiteStart({ minsPastStart: -5, graceMinutes: 2 }), true);
+  assert.strictEqual(shouldTriggerDespiteStart({ minsPastStart: null, graceMinutes: 2 }), true);
+  assert.strictEqual(shouldTriggerDespiteStart({ minsPastStart: 3, graceMinutes: 2 }), false,
+    'past the grace it is a late join, which looks like a success and is not one');
+  assert.strictEqual(shouldTriggerDespiteStart({ minsPastStart: 0.1, graceMinutes: 0 }), false);
+  assert.strictEqual(shouldTriggerDespiteStart({ minsPastStart: 0.1 }), false,
+    'no setting means the old behaviour');
 });
 
 check('a video host needs the company named, or both the period and the year', () => {

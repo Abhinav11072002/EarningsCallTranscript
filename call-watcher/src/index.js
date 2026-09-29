@@ -7,7 +7,13 @@ const { resolveDialinLinkByClick, sameHostAsPrefix } = require('./dialinLinkClic
 const { resolveWebcastPage } = require('./webcastResolver');
 const { fillRegistrationForm } = require('./formFiller');
 const { advanceJoinFlow } = require('./joinFlow');
-const { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor, withinActionableWindow } = require('./dispatchRules');
+const {
+  shouldSkipAsLate,
+  shouldReacquireNow,
+  retryDelayMsFor,
+  withinActionableWindow,
+  shouldTriggerDespiteStart,
+} = require('./dispatchRules');
 const { rewriteToWebcastUrl, telephoneOnlyReason, notAWebcastReason } = require('./providerRules');
 const { ownsRow, readShard, describeShard } = require('./shard');
 const { strategyForAttempt } = require('./retryStrategy');
@@ -293,8 +299,8 @@ async function triggerCall(context, prepared, row, key, store, logger, obs, call
     // minutesRemaining, not minutesUntilCall: the latter re-parses the countdown TEXT, which
     // was frozen at scrape time, so this guard silently never fired. See tableWatcher.stampDueAt.
     const minsLeftNow = minutesRemaining(row);
-    const lateGrace = Number(config.lateStartGraceMinutes ?? 0);
-    if (minsLeftNow !== null && minsLeftNow <= -lateGrace) {
+    const triggerGrace = Number(config.lateTriggerGraceMinutes ?? 0);
+    if (!shouldTriggerDespiteStart({ minsPastStart: minsLeftNow === null ? null : -minsLeftNow, graceMinutes: triggerGrace })) {
       throw new Error(
         `Call started ${Math.abs(minsLeftNow).toFixed(1)} min ago while it was queued for the trigger - not joining late`
       );

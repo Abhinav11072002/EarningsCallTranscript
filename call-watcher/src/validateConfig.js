@@ -43,6 +43,7 @@ const SPEC = {
   dummyIdentity: { type: 'identity', required: true },
   knownDirectProviderDomains: { type: 'domains', required: true },
   videoHostDomains: { type: 'domains', required: false },
+  lateTriggerGraceMinutes: { type: 'number', required: false },
   maxConcurrentPreparations: { type: 'int', min: 1, max: 20 },
   prepareDeadlineMs: { type: 'int', min: 10000, max: 600000 },
   triggerDeadlineMs: { type: 'int', min: 10000, max: 600000 },

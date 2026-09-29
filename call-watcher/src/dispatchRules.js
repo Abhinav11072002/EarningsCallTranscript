@@ -140,4 +140,25 @@ function retryDelayMsFor({
   return Math.min(Math.max(exponential, spread), maxDelayMs, latestUseful);
 }
 
-module.exports = { shouldSkipAsLate, shouldReacquireNow, retryDelayMsFor, withinActionableWindow };
+// Two different questions share one setting today, and they should not.
+//
+// shouldSkipAsLate asks "should we ATTEMPT this call at all?", and the rule there is firm: an
+// attempt begins before the call does. This asks something narrower - the page is open, the form
+// is filled, we are inside the call, and the only thing left is the keystroke. Refusing here does
+// not avoid a late join; it discards one that already happened.
+//
+// CRFCF 2027Q2 is why. Prepared, queued behind CARD.L for the serialized trigger, and it crossed
+// its start time while waiting. By 0.1 of a minute.
+function shouldTriggerDespiteStart({ minsPastStart, graceMinutes }) {
+  if (minsPastStart === null || !Number.isFinite(minsPastStart)) return true;
+  if (minsPastStart <= 0) return true;
+  return minsPastStart <= Math.max(0, Number(graceMinutes) || 0);
+}
+
+module.exports = {
+  shouldSkipAsLate,
+  shouldReacquireNow,
+  retryDelayMsFor,
+  withinActionableWindow,
+  shouldTriggerDespiteStart,
+};

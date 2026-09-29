@@ -1,5 +1,5 @@
 const { NATIVE_APP_PATTERN, LEGITIMATE_WAIT_PATTERN } = require('./joinFlow');
-const { isOffsiteAuthOrSocial } = require('./offsiteHosts');
+const { isOffsiteDeadEnd } = require('./offsiteHosts');
 
 // The separator is [\s_-]* everywhere, not \s*. Real ids are hyphenated or underscored -
 // q4inc's registration form uses analyst-first-name, analyst-last-name, analyst-company-name -
@@ -1258,7 +1258,7 @@ async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback
     if (IRRELEVANT_BUTTON_PATTERN.test(text)) continue;
     if (isPlainAnchor) {
       const href = await btn.getAttribute('href').catch(() => null);
-      if (href && isOffsiteAuthOrSocial(frame.url(), href)) continue;
+      if (href && isOffsiteDeadEnd(frame.url(), href)) continue;
     }
     // "Join from Zoom Workplace app" matches the CTA pattern on the bare word "join", and
     // clicking it fires a zoommtg:// handler whose OS dialog steals the foreground - which is
