@@ -428,6 +428,16 @@ const STALE_BUTTON_PATTERN = /replay|archive|on-?demand|playback|recording|trans
 const MODE_SWITCH_PATTERN =
   /already\s+regist|already\s+have\s+an?\s+account|returning\s+(?:attendee|user|visitor)|(?:sign|log)\s*in\s+instead|switch\s+to\s+(?:login|sign)/i;
 
+// Controls that belong to the LIVE PAGE rather than to getting onto it: the question box, the
+// poll, the chat, the feedback survey. These appear once we are already through, so reaching one
+// means the filler ran out of doors and started pressing whatever was left.
+//
+// PINWF 2026Q2 on brrmedia is the case. Registration succeeded - email, name, consent, NEXT,
+// LOG IN - and the filler then clicked "SUBMIT QUESTIONS", which matches CTA_BUTTON_PATTERN on
+// the bare word "submit". It sent an empty question to the broadcaster on our dummy identity.
+const ON_PAGE_INTERACTION_PATTERN =
+  /submit\s+(?:a\s+)?question|ask\s+(?:a\s+)?question|send\s+(?:a\s+)?(?:question|message|comment)|\bq\s*&\s*a\b|submit\s+(?:a\s+)?(?:poll|vote|feedback|survey|rating)|post\s+(?:a\s+)?comment/i;
+
 const CTA_BUTTON_PATTERN = /register|submit|enter|join|continue|watch now|listen now|access|attend/i;
 
 // A form split across steps advances with a button that says none of the above. brrmedia asks
@@ -1266,6 +1276,7 @@ async function clickFirstMatchingButton(page, frame, logger, allowSubmitFallback
     if (NATIVE_APP_PATTERN.test(text)) continue;
     if (STALE_BUTTON_PATTERN.test(text)) continue;
     if (MODE_SWITCH_PATTERN.test(text)) continue;
+    if (ON_PAGE_INTERACTION_PATTERN.test(text)) continue;
     if (await isFurniture(btn)) continue;
     if (await isCoveredByOverlay(btn)) continue;
     const entryWorded =
@@ -1364,6 +1375,7 @@ async function hasPendingRegistration(page, clearedEntryButtons = new Set()) {
       if (clearedEntryButtons.has(text)) continue;
       if (IRRELEVANT_BUTTON_PATTERN.test(text)) continue;
       if (NATIVE_APP_PATTERN.test(text) || STALE_BUTTON_PATTERN.test(text)) continue;
+      if (ON_PAGE_INTERACTION_PATTERN.test(text)) continue;
       if (await isFurniture(button)) continue;
       return true;
     }
@@ -1625,4 +1637,5 @@ async function hasIdentityFields(page) {
   return false;
 }
 
-module.exports = { fillRegistrationForm, matchField, inspectFields, hasIdentityFields };
+module.exports = {
+  ON_PAGE_INTERACTION_PATTERN, fillRegistrationForm, matchField, inspectFields, hasIdentityFields };

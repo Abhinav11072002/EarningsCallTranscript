@@ -1700,6 +1700,20 @@ check('a link to a sign-in or social host on another site is never clicked', () 
   );
 });
 
+check('the question box on the live page is not a way in', () => {
+  const { ON_PAGE_INTERACTION_PATTERN } = require('../../src/formFiller');
+
+  assert.ok(ON_PAGE_INTERACTION_PATTERN.test('SUBMIT QUESTIONS'),
+    'PINWF 2026Q2 sent an empty question to the broadcaster after registering on brrmedia');
+  assert.ok(ON_PAGE_INTERACTION_PATTERN.test('Ask a question'));
+  assert.ok(ON_PAGE_INTERACTION_PATTERN.test('Q&A'));
+  assert.ok(ON_PAGE_INTERACTION_PATTERN.test('Submit feedback'));
+
+  assert.ok(!ON_PAGE_INTERACTION_PATTERN.test('Submit'), 'the bare verb is how most forms submit');
+  assert.ok(!ON_PAGE_INTERACTION_PATTERN.test('Submit Registration'));
+  assert.ok(!ON_PAGE_INTERACTION_PATTERN.test('Enter the webcast'));
+});
+
 check('a Zoom registration confirmation is followed to its join link', () => {
   const { isZoomRegistrantPage, ZOOM_JOIN_HREF } = require('../../src/joinFlow');
 
